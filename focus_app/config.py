@@ -41,6 +41,47 @@ def normalize_exe(name: str) -> str:
     return name.lower()
 
 
+# 자주 쓰는 앱의 읽기 쉬운 이름 (시작 메뉴 등에서 이름을 얻지 못했을 때 사용)
+KNOWN_APP_NAMES: Dict[str, str] = {
+    "notepad.exe": "메모장",
+    "calc.exe": "계산기",
+    "calculatorapp.exe": "계산기",
+    "mspaint.exe": "그림판",
+    "winword.exe": "Word",
+    "excel.exe": "Excel",
+    "powerpnt.exe": "PowerPoint",
+    "outlook.exe": "Outlook",
+    "onenote.exe": "OneNote",
+    "olk.exe": "Outlook (새 버전)",
+    "teams.exe": "Teams",
+    "ms-teams.exe": "Teams",
+    "acrobat.exe": "Adobe Acrobat",
+    "acrord32.exe": "Adobe Acrobat Reader",
+    "code.exe": "Visual Studio Code",
+    "chrome.exe": "Chrome",
+    "msedge.exe": "Edge",
+    "firefox.exe": "Firefox",
+    "whale.exe": "네이버 웨일",
+    "hwp.exe": "한글",
+    "notion.exe": "Notion",
+    "obsidian.exe": "Obsidian",
+    "slack.exe": "Slack",
+    "kakaotalk.exe": "카카오톡",
+    "zoom.exe": "Zoom",
+    "windowsterminal.exe": "터미널",
+    "sumatrapdf.exe": "SumatraPDF",
+}
+
+
+def friendly_name(exe_name: str) -> str:
+    """실행 파일 이름을 사람이 읽기 쉬운 이름으로 바꿉니다 (예: "winword.exe" -> "Word")."""
+    exe = normalize_exe(exe_name)
+    if exe in KNOWN_APP_NAMES:
+        return KNOWN_APP_NAMES[exe]
+    stem = exe[:-4] if exe.endswith(".exe") else exe
+    return stem[:1].upper() + stem[1:] if stem else exe
+
+
 @dataclass
 class Profile:
     name: str
@@ -86,17 +127,41 @@ def default_profiles() -> List[Profile]:
     ]
 
 
+DEFAULT_DURATION_PRESETS: List[int] = [25, 50, 90, 120, 180]
+MAX_DURATION_PRESETS = 8
+
+
+def clean_presets(values: Any) -> List[int]:
+    """시간 목록을 1~1440분 정수로 정리합니다 (중복 제거, 오름차순, 최대 8개). 비면 기본값."""
+    out: List[int] = []
+    if isinstance(values, list):
+        for v in values:
+            try:
+                m = int(v)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= m <= 1440 and m not in out:
+                out.append(m)
+    out.sort()
+    return out[:MAX_DURATION_PRESETS] or list(DEFAULT_DURATION_PRESETS)
+
+
 @dataclass
 class Settings:
     profiles: List[Profile] = field(default_factory=default_profiles)
     active_profile: str = "공부용"
     poll_interval_ms: int = 300  # 포그라운드 창 확인 주기
     unlock_code_length: int = 32  # 해제용 랜덤 문자열 길이
-    default_duration_minutes: int = 50
+    default_duration_minutes: int = 50  # 마지막으로 고른 집중 시간. 0이면 "끝낼 때까지"
+    duration_presets: List[int] = field(default_factory=lambda: list(DEFAULT_DURATION_PRESETS))
+    custom_duration_minutes: int = 45  # "직접 입력" 칸에 마지막으로 넣은 값
+    window_geometry: str = ""  # 메인 창 위치·크기 (Qt saveGeometry의 base64)
     require_unlock_for_quit: bool = True
     require_unlock_for_profile_switch: bool = True
     emergency_delay_minutes: int = 10  # 비상 해제가 실제로 적용되기까지의 지연
     show_block_notifications: bool = True
+    # 화면 표시용 앱 정보: 실행 파일 이름 -> {"name": 표시 이름, "path": 전체 경로}
+    app_info: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
     # ------------------------------------------------------------- 조회
     def profile_names(self) -> List[str]:
@@ -147,6 +212,24 @@ class Settings:
         if self.active_profile == old:
             self.active_profile = new
 
+    def remember_app(self, exe_name: str, name: str = "", path: str = "") -> None:
+        exe = normalize_exe(exe_name)
+        if not exe:
+            return
+        info = self.app_info.setdefault(exe, {})
+        if name.strip():
+            info["name"] = name.strip()
+        if path.strip():
+            info["path"] = path.strip()
+
+    def app_display_name(self, exe_name: str) -> str:
+        exe = normalize_exe(exe_name)
+        name = self.app_info.get(exe, {}).get("name", "")
+        return name or friendly_name(exe)
+
+    def app_path(self, exe_name: str) -> str:
+        return self.app_info.get(normalize_exe(exe_name), {}).get("path", "")
+
     # --------------------------------------------------------- 영속화
     @classmethod
     def path(cls) -> Path:
@@ -182,8 +265,13 @@ class Settings:
                 )
             if profiles:
                 settings.profiles = profiles
+        info_raw = raw.get("app_info")
+        if isinstance(info_raw, dict):
+            for exe, info in info_raw.items():
+                if isinstance(info, dict):
+                    settings.remember_app(str(exe), str(info.get("name", "")), str(info.get("path", "")))
         for f in fields(cls):
-            if f.name == "profiles" or f.name not in raw:
+            if f.name in ("profiles", "app_info", "duration_presets") or f.name not in raw:
                 continue
             value = raw[f.name]
             current = getattr(settings, f.name)
@@ -200,7 +288,9 @@ class Settings:
         settings.poll_interval_ms = max(100, min(5000, settings.poll_interval_ms))
         settings.unlock_code_length = max(8, min(128, settings.unlock_code_length))
         settings.emergency_delay_minutes = max(1, min(240, settings.emergency_delay_minutes))
-        settings.default_duration_minutes = max(1, min(1440, settings.default_duration_minutes))
+        settings.default_duration_minutes = max(0, min(1440, settings.default_duration_minutes))
+        settings.custom_duration_minutes = max(1, min(1440, settings.custom_duration_minutes))
+        settings.duration_presets = clean_presets(raw.get("duration_presets", DEFAULT_DURATION_PRESETS))
         if settings.get_profile(settings.active_profile) is None:
             settings.active_profile = settings.profiles[0].name
         return settings

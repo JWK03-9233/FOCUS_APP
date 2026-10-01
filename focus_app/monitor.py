@@ -36,6 +36,7 @@ class _Backend:
     bring_to_front: Callable[[int], bool] = winapi.bring_to_front
     is_window: Callable[[int], bool] = winapi.is_window
     is_minimized: Callable[[int], bool] = winapi.is_minimized
+    focus_fallback: Callable[[], bool] = winapi.focus_taskbar
 
 
 class AllowlistMonitor:
@@ -101,28 +102,36 @@ class AllowlistMonitor:
 
     def _block(self, window: ForegroundWindow) -> None:
         target = self.backend.root_owner(window.hwnd) or window.hwnd
-        log.info("차단: %s (%s) hwnd=%s", window.exe_name, window.title, target)
-        try:
-            self.backend.minimize(target)
-            if target != window.hwnd:
-                self.backend.minimize(window.hwnd)
-        except Exception:  # noqa: BLE001
-            log.exception("창 최소화 실패")
-        self.block_count += 1
-        self._restore_last_allowed()
-        self._notify(window)
+        # 이미 최소화된 창이 포그라운드로 남아 있는 경우(복귀할 창이 없을 때 생김)는
+        # 새 차단으로 세지 않고 포커스만 다시 옮깁니다.
+        if not self.backend.is_minimized(target):
+            log.info("차단: %s (%s) hwnd=%s", window.exe_name, window.title, target)
+            try:
+                self.backend.minimize(target)
+                if target != window.hwnd:
+                    self.backend.minimize(window.hwnd)
+            except Exception:  # noqa: BLE001
+                log.exception("창 최소화 실패")
+            self.block_count += 1
+            self._notify(window)
+        if not self._restore_last_allowed():
+            try:
+                self.backend.focus_fallback()
+            except Exception:  # noqa: BLE001
+                log.exception("작업 표시줄로 포커스 이동 실패")
 
-    def _restore_last_allowed(self) -> None:
+    def _restore_last_allowed(self) -> bool:
         hwnd = self.last_allowed_hwnd
         if not hwnd:
-            return
+            return False
         if not self.backend.is_window(hwnd):
             self.last_allowed_hwnd = 0
-            return
+            return False
         try:
-            self.backend.bring_to_front(hwnd)
+            return bool(self.backend.bring_to_front(hwnd))
         except Exception:  # noqa: BLE001
             log.exception("허용 앱 복귀 실패")
+            return False
 
     def _notify(self, window: ForegroundWindow) -> None:
         if self.on_block is None:

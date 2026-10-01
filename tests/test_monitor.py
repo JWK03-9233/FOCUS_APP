@@ -19,6 +19,7 @@ class FakeOS:
     fronted: List[int] = field(default_factory=list)
     owners: Dict[int, int] = field(default_factory=dict)
     hosted: Dict[int, WindowInfo] = field(default_factory=dict)
+    fallbacks: int = 0
 
     def add(self, hwnd, exe, pid=None, cls="", title=""):
         self.windows[hwnd] = WindowInfo(hwnd, pid or hwnd * 10, exe, f"C:\\{exe}", cls, title)
@@ -33,7 +34,12 @@ class FakeOS:
             bring_to_front=self._front,
             is_window=lambda h: h in self.windows,
             is_minimized=lambda h: h in self.minimized,
+            focus_fallback=self._fallback,
         )
+
+    def _fallback(self):
+        self.fallbacks += 1
+        return True
 
     def _minimize(self, h):
         self.minimized.append(h)
@@ -139,8 +145,12 @@ def test_notification_cooldown_per_window():
     os_.foreground_hwnd = 2
     for _ in range(5):
         mon.poll()
-    assert mon.block_count == 5
+    assert mon.block_count == 1  # 이미 최소화된 창은 다시 세지 않음
     assert len(blocked) == 1
+    os_.minimized.clear()  # 사용자가 다시 띄움
+    mon.poll()
+    assert mon.block_count == 2
+    assert len(blocked) == 1  # 쿨다운 중이라 알림은 한 번
 
 
 def test_profile_switch_applies_immediately():
@@ -158,3 +168,26 @@ def test_backend_errors_do_not_crash():
 
     mon = AllowlistMonitor(Profile("p", ["code.exe"]), own_pid=OWN, backend=_Backend(foreground=boom))
     assert mon.poll() is Decision.IGNORE
+
+
+def test_block_without_allowed_window_moves_focus_to_taskbar():
+    os_, mon, blocked = make()
+    os_.add(2, "chrome.exe")
+    os_.foreground_hwnd = 2
+    assert mon.poll() is Decision.BLOCK
+    assert os_.minimized == [2]
+    assert os_.fallbacks == 1
+
+
+def test_already_minimized_foreground_is_not_counted_again():
+    os_, mon, blocked = make()
+    os_.add(2, "chrome.exe")
+    os_.foreground_hwnd = 2
+    mon.poll()
+    # 포커스 이동이 실패해 최소화된 창이 계속 포그라운드인 상황
+    mon.poll()
+    mon.poll()
+    assert os_.minimized == [2]
+    assert mon.block_count == 1
+    assert len(blocked) == 1
+    assert os_.fallbacks == 3

@@ -5,6 +5,11 @@ from __future__ import annotations
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+if not __package__:
+    # `python focus_app/main.py`처럼 스크립트로 직접 실행된 경우 패키지 상위 폴더를 경로에 추가
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from focus_app.config import data_dir
 from focus_app.version import APP_ID, APP_NAME
@@ -24,17 +29,61 @@ def _setup_logging() -> None:
         root.addHandler(console)
 
 
+def _install_exception_hooks() -> None:
+    """처리되지 않은 예외를 로그 파일에 남깁니다.
+
+    pythonw/exe로 실행하면 콘솔이 없어 예외가 아무 데도 기록되지 않으므로,
+    Qt 슬롯과 백그라운드 스레드에서 난 예외까지 모두 focus_app.log에 기록합니다.
+    """
+    import threading
+
+    log = logging.getLogger("focus_app.crash")
+
+    def hook(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        log.critical("처리되지 않은 예외", exc_info=(exc_type, exc, tb))
+
+    def thread_hook(args):
+        if args.exc_type is SystemExit:
+            return
+        log.critical(
+            "스레드 %s에서 처리되지 않은 예외",
+            args.thread.name if args.thread else "?",
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    sys.excepthook = hook
+    threading.excepthook = thread_hook
+
+
+def _set_windows_app_id() -> None:
+    # python.exe로 실행해도 작업 표시줄에 파이썬 대신 FocusApp 아이콘이 보이게 함
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(f"{APP_ID}.{APP_ID}")
+        except (AttributeError, OSError):
+            pass
+
+
 def main() -> int:
     _setup_logging()
+    _install_exception_hooks()
+    _set_windows_app_id()
     from PySide6.QtCore import QLockFile
     from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
     from focus_app.app import FocusApp
+    from focus_app.ui import icons
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_ID)
     app.setApplicationDisplayName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)  # 창이 모두 닫혀도 트레이에 남음
+    app.setWindowIcon(icons.app_icon())  # 모든 창·대화상자의 기본 아이콘
 
     lock = QLockFile(str(data_dir() / "focus_app.lock"))
     lock.setStaleLockTime(0)

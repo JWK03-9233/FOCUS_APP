@@ -108,6 +108,16 @@ class FocusSession:
             pass
 
 
+def format_minutes(minutes: int) -> str:
+    """시간 버튼 표시용: 25분, 2시간, 1시간 30분."""
+    h, m = divmod(max(0, int(minutes)), 60)
+    if h and m:
+        return f"{h}시간 {m}분"
+    if h:
+        return f"{h}시간"
+    return f"{m}분"
+
+
 def format_duration(seconds: Optional[int]) -> str:
     if seconds is None:
         return "제한 없음"

@@ -1,48 +1,71 @@
-"""외부 리소스 없이 QPainter로 트레이 아이콘을 그립니다."""
+"""앱/트레이 아이콘. focus_app/assets/focus_icon.ico를 쓰고, 트레이에서는 상태 점을 덧그립니다."""
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Optional
+
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
+
+ICON_PATH = Path(__file__).resolve().parent.parent / "assets" / "focus_icon.ico"
 
 COLOR_IDLE = QColor("#8a8f98")
 COLOR_ACTIVE = QColor("#2e9e5b")
 COLOR_EMERGENCY = QColor("#d9822b")
 
+_base_pixmap: Optional[QPixmap] = None
 
-def make_icon(color: QColor, size: int = 64, locked: bool = False) -> QIcon:
-    pm = QPixmap(size, size)
-    pm.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    margin = size * 0.08
-    p.setPen(QPen(QColor(0, 0, 0, 60), size * 0.04))
-    p.setBrush(QBrush(color))
-    p.drawEllipse(QRectF(margin, margin, size - 2 * margin, size - 2 * margin))
-    # 가운데에 잠금 표시 (활성) 또는 빈 원 (대기)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QBrush(QColor("white")))
-    if locked:
-        body = QRectF(size * 0.33, size * 0.46, size * 0.34, size * 0.26)
-        p.drawRoundedRect(body, size * 0.04, size * 0.04)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(QColor("white"), size * 0.07))
-        p.drawArc(QRectF(size * 0.38, size * 0.28, size * 0.24, size * 0.3), 0, 180 * 16)
-    else:
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(QColor("white"), size * 0.07))
-        p.drawEllipse(QRectF(size * 0.33, size * 0.33, size * 0.34, size * 0.34))
-    p.end()
+
+def _base(size: int = 64) -> QPixmap:
+    """앱 아이콘 원본 (파일이 없으면 단색 원으로 대신)."""
+    global _base_pixmap
+    if _base_pixmap is None:
+        pm = QIcon(str(ICON_PATH)).pixmap(128, 128) if ICON_PATH.exists() else QPixmap()
+        if pm.isNull():
+            pm = QPixmap(128, 128)
+            pm.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(COLOR_IDLE))
+            p.drawEllipse(QRectF(8, 8, 112, 112))
+            p.end()
+        _base_pixmap = pm
+    return _base_pixmap.scaled(
+        size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+    )
+
+
+def app_icon() -> QIcon:
+    """창·작업 표시줄에 쓰는 앱 아이콘."""
+    if ICON_PATH.exists():
+        icon = QIcon(str(ICON_PATH))
+        if not icon.isNull():
+            return icon
+    return QIcon(_base())
+
+
+def _with_dot(color: Optional[QColor], size: int = 64) -> QIcon:
+    pm = _base(size)
+    if color is not None:
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        d = size * 0.42
+        p.setPen(QPen(QColor("white"), size * 0.06))
+        p.setBrush(QBrush(color))
+        p.drawEllipse(QRectF(size - d - 1, size - d - 1, d, d))
+        p.end()
     return QIcon(pm)
 
 
 def idle_icon() -> QIcon:
-    return make_icon(COLOR_IDLE, locked=False)
+    return _with_dot(None)
 
 
 def active_icon() -> QIcon:
-    return make_icon(COLOR_ACTIVE, locked=True)
+    return _with_dot(COLOR_ACTIVE)
 
 
 def emergency_icon() -> QIcon:
-    return make_icon(COLOR_EMERGENCY, locked=True)
+    return _with_dot(COLOR_EMERGENCY)

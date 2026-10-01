@@ -1,4 +1,4 @@
 @echo off
-rem 개발용 실행 스크립트: 콘솔 없이 트레이 앱을 띄웁니다.
+rem 콘솔 창 없이 FocusApp을 띄웁니다. (pythonw로 따로 실행하고 이 창은 바로 닫힘)
 cd /d "%~dp0\.."
-pythonw -m focus_app
+start "" pythonw -m focus_app

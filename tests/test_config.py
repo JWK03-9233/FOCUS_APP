@@ -46,7 +46,7 @@ def test_settings_load_tolerates_garbage(tmp_path):
     s = Settings.load(path)
     assert s.profile_names() == ["공부용", "업무용", "자유 시간"]
 
-    path.write_text('{"profiles": [], "active_profile": "없음", "poll_interval_ms": 5, "unlock_code_length": 1000}')
+    path.write_text('{"profiles": [], "active_profile": "없음", "poll_interval_ms": 5, "unlock_code_length": 1000}', encoding="utf-8")
     s = Settings.load(path)
     assert s.active_profile == "공부용"
     assert s.poll_interval_ms == 100

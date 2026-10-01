@@ -8,7 +8,7 @@ a = Analysis(
     [os.path.join(root, "focus_app", "__main__.py")],
     pathex=[root],
     binaries=[],
-    datas=[],
+    datas=[(os.path.join(root, "focus_app", "assets"), os.path.join("focus_app", "assets"))],
     hiddenimports=[],
     hookspath=[],
     runtime_hooks=[],
@@ -23,6 +23,6 @@ exe = EXE(
     exclude_binaries=True,
     name="FocusApp",
     console=False,  # 트레이 앱이므로 콘솔 창 없음
-    icon=None,
+    icon=os.path.join(root, "focus_app", "assets", "focus_icon.ico"),
 )
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="FocusApp")

@@ -65,6 +65,8 @@ if IS_WINDOWS:  # pragma: no cover - Windows 전용
     user32.GetWindow.restype = wintypes.HWND
     user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
     user32.GetWindowLongW.restype = wintypes.LONG
+    user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user32.FindWindowW.restype = wintypes.HWND
     user32.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_void_p]
 
     WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -248,6 +250,18 @@ def bring_to_front(hwnd: int) -> bool:
     user32.keybd_event(VK_MENU, 0, 0, None)  # pragma: no cover
     user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, None)  # pragma: no cover
     return bool(user32.SetForegroundWindow(hwnd))  # pragma: no cover
+
+
+def focus_taskbar() -> bool:
+    """작업 표시줄로 포커스를 옮깁니다.
+
+    복귀할 허용 앱이 없을 때, 최소화된 차단 앱이 계속 포그라운드(키보드 입력 대상)로
+    남지 않게 하기 위해 사용합니다.
+    """
+    if not IS_WINDOWS:
+        return False
+    hwnd = int(user32.FindWindowW("Shell_TrayWnd", None) or 0)  # pragma: no cover
+    return bring_to_front(hwnd) if hwnd else False  # pragma: no cover
 
 
 def list_visible_windows() -> List[WindowInfo]:

@@ -76,8 +76,8 @@ class UnlockDialog(QDialog):
 
         layout = QVBoxLayout(self)
         intro = QLabel(
-            f"<b>{purpose}</b>를 진행하려면 아래 문자열을 <u>직접 손으로</u> 입력하세요.<br>"
-            "붙여넣기는 할 수 없고, 틀리면 새 문자열이 나옵니다. 공백은 무시됩니다."
+            f"<b>{purpose}</b> — 정말 하려면 아래 문자열을 <u>직접 손으로</u> 입력하세요.<br>"
+            "붙여넣기는 되지 않고, 틀리면 새 문자열이 나옵니다. 띄어쓰기는 입력하지 않아도 됩니다."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -99,7 +99,13 @@ class UnlockDialog(QDialog):
         self.input.setFont(font)
         self.input.setPlaceholderText("여기에 입력")
         self.input.returnPressed.connect(self._check)
+        self.input.textChanged.connect(self._update_counter)
         layout.addWidget(self.input)
+
+        self.counter = QLabel("")
+        self.counter.setObjectName("hint")
+        self.counter.setAlignment(Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(self.counter)
 
         self.status = QLabel("")
         self.status.setStyleSheet("color: #c0392b;")
@@ -114,11 +120,16 @@ class UnlockDialog(QDialog):
 
         self._refresh()
 
+    def _update_counter(self, *_args) -> None:
+        typed = len("".join(self.input.text().split()))
+        self.counter.setText(f"{typed} / {len(self.challenge.code)} 글자")
+
     def _refresh(self) -> None:
         self.code_label.setText(self.challenge.display)
         self.input.clear()
         self.input._previous = ""
         self.input.setFocus()
+        self._update_counter()
 
     def _check(self) -> None:
         if self.challenge.verify(self.input.text()):
@@ -134,4 +145,7 @@ def confirm_with_code(length: int, purpose: str, parent: QWidget | None = None) 
     dlg.show()
     dlg.raise_()
     dlg.activateWindow()
-    return dlg.exec() == QDialog.DialogCode.Accepted
+    try:
+        return dlg.exec() == QDialog.DialogCode.Accepted
+    finally:
+        dlg.deleteLater()
