@@ -11,7 +11,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon
 
-from focus_app import helper, updater, winapi
+from focus_app import helper, taskmgr_lock, updater, winapi
 from focus_app.config import Settings, data_dir
 from focus_app.enforcer import ForegroundWindow
 from focus_app.monitor import AllowlistMonitor
@@ -74,6 +74,8 @@ class FocusApp:
 
         self._helper_ok = False  # 관리자 권한 도우미가 지금 감시 중인지 (2초마다 갱신)
         self._helper_checked = 0.0
+        self._helper_installed = False  # 도우미 작업이 등록되어 있는지 (집중을 시작할 때 확인)
+        self._helper_started = 0.0  # 마지막으로 도우미를 띄운 때 (꺼졌을 때 너무 자주 다시 띄우지 않게)
         self._warned_elevated = False
         self._end_popup: Optional[FocusEndDialog] = None
 
@@ -82,6 +84,8 @@ class FocusApp:
         self._latest: Optional[updater.ReleaseInfo] = None
 
         self._resume_saved_session()
+        if self.session is None and taskmgr_lock.engaged(data_dir()):
+            self._start_helper()  # 지난번에 꺼 둔 작업 관리자를 도우미가 되돌리게 함
         self._refresh_status()
         if show_window:
             self.show_window()
@@ -257,6 +261,8 @@ class FocusApp:
         self.monitor = None
         self.session = None
         FocusSession.clear()
+        if taskmgr_lock.engaged(data_dir()):
+            self._start_helper()  # 도우미가 꺼져 있었다면 띄워서 작업 관리자를 되돌리게 함
         self._refresh_status()
 
         focused = session.elapsed_seconds()
@@ -303,6 +309,9 @@ class FocusApp:
         if now - self._helper_checked >= 2.0:
             self._helper_checked = now
             self._helper_ok = helper.helper_alive()
+            if not self._helper_ok and self._helper_installed and now - self._helper_started >= 10.0:
+                log.info("도우미가 꺼져 있어 다시 띄웁니다.")
+                self._start_helper(check_registered=False)
         self.monitor.poll()
 
     # ------------------------------------------------------ 관리자 권한 도우미
@@ -310,10 +319,14 @@ class FocusApp:
         """본 앱이 맡을 창: 도우미가 감시 중이면 관리자 권한 창은 도우미에게 맡김."""
         return not (self._helper_ok and winapi.process_elevated(window.pid))
 
-    def _start_helper(self) -> None:
+    def _start_helper(self, check_registered: bool = True) -> None:
+        self._helper_started = time.monotonic()
+
         def work() -> None:
             try:
-                if helper.start():
+                if check_registered:
+                    self._helper_installed = helper.is_registered()
+                if self._helper_installed and helper.start(check_registered=False):
                     log.info("관리자 권한 도우미 실행 요청")
             except Exception:  # noqa: BLE001
                 log.exception("도우미 실행 실패")
@@ -478,6 +491,8 @@ class FocusApp:
             if not self._confirm("FocusApp 종료"):
                 return
         # 세션 파일은 남겨 두어, 재실행 시 남은 시간 동안 차단을 이어가게 함 (해제 후 종료는 파일이 이미 지워짐)
+        if self.session is not None:
+            helper.mark_quit(self.session)  # 정식으로 끈 것이니 도우미가 다시 띄우지 않게
         self._shutdown()
 
     def _shutdown(self) -> None:

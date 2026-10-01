@@ -70,13 +70,18 @@ def _set_windows_app_id() -> None:
             pass
 
 
-def _helper_main(argv: list) -> int:
-    """``--helper [--data-dir <폴더>]``: 창 없이 관리자 권한 도우미 감시만 실행 (Qt를 띄우지 않음)."""
+def _apply_data_dir(argv: list) -> None:
+    """``--data-dir <폴더>``: 작업 스케줄러로 뜬 도우미·본 앱이 처음 실행한 쪽과 같은 설정·세션 폴더를 보도록
+    (관리자 권한이 다른 계정으로 뜨는 경우 등)."""
     if "--data-dir" in argv:
         i = argv.index("--data-dir")
         if i + 1 < len(argv):
-            # 관리자 권한이 다른 계정으로 뜨더라도 본 앱과 같은 설정·세션 폴더를 보도록
             os.environ["FOCUSAPP_DATA_DIR"] = argv[i + 1]
+
+
+def _helper_main(argv: list) -> int:
+    """``--helper [--data-dir <폴더>]``: 창 없이 관리자 권한 도우미 감시만 실행 (Qt를 띄우지 않음)."""
+    _apply_data_dir(argv)
     _setup_logging("helper.log")
     _install_exception_hooks()
     from focus_app.helper import run_helper
@@ -87,6 +92,13 @@ def _helper_main(argv: list) -> int:
 def main() -> int:
     if "--helper" in sys.argv[1:]:
         return _helper_main(sys.argv[1:])
+    if "--register-helper" in sys.argv[1:]:
+        # 설치 프로그램이 관리자 권한으로 실행: 창 없이 도우미 작업만 등록하고 끝냄
+        _setup_logging("helper.log")
+        from focus_app.helper import register_here
+
+        return register_here()
+    _apply_data_dir(sys.argv[1:])
     _setup_logging()
     _install_exception_hooks()
     _set_windows_app_id()
@@ -107,6 +119,10 @@ def main() -> int:
     if not lock.tryLock(100):
         QMessageBox.information(None, APP_NAME, f"{APP_NAME}이(가) 이미 실행 중입니다. 트레이 아이콘을 확인하세요.")
         return 1
+
+    from focus_app import helper
+
+    helper.clear_quit()  # 다시 실행했으니 집중 중 강제로 꺼지면 도우미가 다시 띄워도 됨
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
         QMessageBox.critical(None, APP_NAME, "시스템 트레이를 사용할 수 없어 실행할 수 없습니다.")

@@ -169,6 +169,7 @@ class Settings:
     favorite_apps: List[str] = field(default_factory=list)  # 앱 고르기 창 맨 위에 보일 즐겨찾기 (실행 파일 이름)
     hidden_apps: List[str] = field(default_factory=list)  # 앱 고르기 창 맨 아래 '숨긴 앱'으로 보낸 앱
     require_unlock_for_quit: bool = True
+    block_task_manager: bool = False  # 엄격 모드: 집중 중 작업 관리자 끄기 (관리자 권한 도우미가 있어야 동작)
     require_unlock_for_profile_switch: bool = True
     emergency_delay_minutes: int = 10  # 비상 해제가 실제로 적용되기까지의 지연
     show_block_notifications: bool = True

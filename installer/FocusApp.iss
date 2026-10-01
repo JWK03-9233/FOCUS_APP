@@ -60,6 +60,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "startup"; Description: "Windows를 시작할 때 FocusApp 자동 실행"; GroupDescription: "시작 옵션:"; Flags: unchecked
+; 관리자 확인(UAC) 1번. 관리자 권한 앱 차단 · 강제로 끄면 다시 띄우기 · 엄격 모드에 필요
+Name: "helper"; Description: "관리자 권한 도우미 설치 (강제 종료 방지 · 관리자 권한 앱 차단, 관리자 확인 1번)"; GroupDescription: "집중 보호:"
 
 [Files]
 ; 이전 버전에서 사라진 파일이 남지 않도록 _internal은 통째로 교체
@@ -87,7 +89,27 @@ begin
   Result := ExpandConstant('{param:RESTARTAPP|0}') = '1';
 end;
 
-{ 관리자 권한 도우미 작업(앱 설정에서 설치)이 있으면 제거할 때 함께 지움. 관리자 확인(UAC)이 한 번 뜹니다. }
+{ 설치할 때 '관리자 권한 도우미 설치'를 골랐으면 UAC를 거쳐 도우미 작업을 등록.
+  앱 안 업데이트(조용한 설치)에서는 확인 창이 뜨지 않게 건너뜀 (작업은 같은 경로를 가리키므로 그대로 둬도 됨).
+  취소하거나 실패해도 설치는 계속되고, 나중에 앱의 ⚙ 설정에서 설치할 수 있음. }
+procedure RegisterHelper;
+var
+  ResultCode: Integer;
+begin
+  if not ShellExec('runas', ExpandConstant('{app}\{#MyAppExeName}'), '--register-helper', '', SW_HIDE,
+                   ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
+    MsgBox('관리자 권한 도우미를 설치하지 못했습니다. 나중에 FocusApp의 ⚙ 설정에서 설치할 수 있습니다.',
+           mbInformation, MB_OK);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if (CurStep = ssPostInstall) and WizardIsTaskSelected('helper') and not WizardSilent then
+    RegisterHelper;
+end;
+
+{ 관리자 권한 도우미 작업(앱 설정이나 설치할 때 등록)이 있으면 제거할 때 함께 지움. 관리자 확인(UAC)이 한 번 뜹니다.
+  도우미가 등록하는 본 앱 다시 띄우기 작업(FocusApp\Main)도 같이 지움. }
 function HelperTaskExists: Boolean;
 var
   ResultCode: Integer;
@@ -101,6 +123,7 @@ var
   ResultCode: Integer;
 begin
   if (CurUninstallStep = usUninstall) and HelperTaskExists then
-    ShellExec('runas', ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "FocusApp\Helper" /F', '',
+    ShellExec('runas', ExpandConstant('{cmd}'),
+              '/c schtasks /Delete /TN "FocusApp\Main" /F & schtasks /Delete /TN "FocusApp\Helper" /F', '',
               SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;

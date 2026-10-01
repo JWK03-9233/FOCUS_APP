@@ -83,7 +83,8 @@ class PreferencesDialog(QDialog):
         layout.addWidget(title_h)
         layout.addWidget(_hint(
             "'관리자 권한으로 실행'한 앱은 Windows 보안 때문에 FocusApp이 최소화할 수 없습니다. "
-            "도우미를 설치하면(관리자 확인 1번) 그런 앱도 막고, 집중 중에 FocusApp을 강제로 꺼도 계속 막습니다."
+            "도우미를 설치하면(관리자 확인 1번) 그런 앱도 막습니다. 집중 중에 FocusApp이나 도우미 중 하나를 "
+            "강제로 끄면 다른 쪽이 다시 띄웁니다."
         ))
         helper_row = QHBoxLayout()
         self.helper_status = QLabel("")
@@ -93,6 +94,11 @@ class PreferencesDialog(QDialog):
         self.helper_btn.clicked.connect(self._toggle_helper)
         helper_row.addWidget(self.helper_btn)
         layout.addLayout(helper_row)
+        self.strict_check = QCheckBox("엄격 모드: 집중 중에는 작업 관리자를 열 수 없게 하기")
+        self.strict_check.setChecked(settings.block_task_manager)
+        layout.addWidget(self.strict_check)
+        self.strict_hint = _hint("")
+        layout.addWidget(self.strict_hint)
         self._refresh_helper()
 
         title3 = QLabel("업데이트")
@@ -131,6 +137,12 @@ class PreferencesDialog(QDialog):
         self.helper_btn.setObjectName("" if installed else "secondary")
         self.helper_btn.style().unpolish(self.helper_btn)
         self.helper_btn.style().polish(self.helper_btn)
+        # 작업 관리자 끄기는 관리자 권한이 필요해 도우미가 맡음
+        self.strict_check.setEnabled(installed)
+        self.strict_hint.setText(
+            "집중이 끝나면 작업 관리자는 저절로 다시 열립니다. 집중 전에 열어 둔 작업 관리자 창도 최소화합니다."
+            if installed else "도우미를 설치해야 쓸 수 있습니다."
+        )
 
     def _toggle_helper(self) -> None:
         from PySide6.QtCore import Qt
@@ -161,6 +173,7 @@ class PreferencesDialog(QDialog):
         s = self.settings
         s.unlock_code_length = int(self.code_len.value())
         s.require_unlock_for_quit = self.quit_check.isChecked()
+        s.block_task_manager = self.strict_check.isChecked()
         s.show_block_notifications = self.notify_check.isChecked()
         s.poll_interval_ms = int(self.poll.value())
         s.check_updates_on_start = self.update_check.isChecked()
