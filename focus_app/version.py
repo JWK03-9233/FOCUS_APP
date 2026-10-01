@@ -1,6 +1,6 @@
 """애플리케이션 버전과 식별자의 단일 출처."""
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 APP_NAME = "FocusApp"
 APP_ID = "FocusApp"  # AppData 폴더 이름
