@@ -1,0 +1,23 @@
+# push·PR마다 테스트만 돌립니다. 빌드와 릴리스는 로컬에서 `python release.py <버전>`으로 합니다.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: python -m pip install -r requirements-dev.txt
+      - name: 테스트
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q

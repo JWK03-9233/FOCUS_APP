@@ -297,7 +297,12 @@ class FocusApp:
         self._latest = info
         if info.newer:
             self.window.set_update_available(info.version)
-            if not self.window.isVisible():
+            # 중요도: critical이면 (집중 중이 아닐 때) 업데이트 창을 바로 띄우고,
+            # recommended이면 창이 보여도 알림, optional이면 창이 숨겨져 있을 때만 알림
+            if info.urgency == "critical" and not self.active and not self._dialog_open:
+                QTimer.singleShot(0, self.open_update)
+                return
+            if info.urgency == "recommended" or not self.window.isVisible():
                 self.tray.showMessage(
                     APP_NAME,
                     f"새 버전 v{info.version}이(가) 있습니다. FocusApp 창에서 업데이트할 수 있습니다.",
@@ -326,11 +331,11 @@ class FocusApp:
         finally:
             self._dialog_open = False
 
-    def _install_update(self, new_dir, work_dir) -> None:
+    def _install_update(self, kind: str, prepared, work_dir) -> None:
         if self.active:
             return
         try:
-            updater.launch_installer(new_dir, work_dir, data_dir() / "update.log")
+            updater.launch_update(kind, prepared, work_dir, data_dir() / "update.log")
         except (updater.UpdateError, OSError) as exc:
             QMessageBox.warning(self._dialog_parent(), "업데이트", str(exc))
             return

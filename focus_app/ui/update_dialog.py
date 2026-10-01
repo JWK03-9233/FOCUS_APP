@@ -30,7 +30,7 @@ class _Bridge(QObject):
     checked = Signal(object)  # ReleaseInfo
     failed = Signal(str)
     progress = Signal(int, int)
-    ready = Signal(object, object)  # 새 파일 폴더, 작업 폴더
+    ready = Signal(object, object)  # 설치 준비된 파일(설치 프로그램 또는 압축 푼 폴더), 작업 폴더
 
 
 def _safe_emit(signal, *args) -> None:
@@ -47,9 +47,9 @@ def run_in_thread(target: Callable[[], None], name: str) -> threading.Thread:
 
 
 class UpdateDialog(QDialog):
-    """설치할 준비가 끝나면 install_requested(새 파일 폴더, 작업 폴더)를 보냅니다."""
+    """설치할 준비가 끝나면 install_requested(종류, 준비된 파일, 작업 폴더)를 보냅니다."""
 
-    install_requested = Signal(object, object)
+    install_requested = Signal(str, object, object)
 
     def __init__(
         self,
@@ -149,7 +149,9 @@ class UpdateDialog(QDialog):
             self.subtitle.setText(f"현재 버전 v{__version__} · 최근 릴리스 v{info.version}")
             self.notes.hide()
             return
-        self.title.setText(f"새 버전 v{info.version}이(가) 있습니다")
+        self.title.setText(
+            f"{'중요 업데이트' if info.urgency == 'critical' else '새 버전'} v{info.version}이(가) 있습니다"
+        )
         self.subtitle.setText(f"현재 버전 v{__version__}  →  v{info.version}")
         self.notes.setMarkdown(info.notes or "(변경 내용 설명 없음)")
         self.notes.show()
@@ -199,8 +201,8 @@ class UpdateDialog(QDialog):
                     progress=lambda done, total: _safe_emit(bridge.progress, done, total),
                     cancelled=cancel.is_set,
                 )
-                new_dir = updater.extract(zip_path, work_dir / "new")
-                _safe_emit(bridge.ready, new_dir, work_dir)
+                prepared = updater.prepare(info, work_dir, zip_path)
+                _safe_emit(bridge.ready, prepared, work_dir)
             except UpdateError as exc:
                 _safe_emit(bridge.failed, str(exc))
             except Exception as exc:  # noqa: BLE001
@@ -215,10 +217,10 @@ class UpdateDialog(QDialog):
         else:
             self.status.setText(f"내려받는 중… {done / 2**20:.1f} MB")
 
-    def _on_ready(self, new_dir: Path, work_dir: Path) -> None:
+    def _on_ready(self, prepared: Path, work_dir: Path) -> None:
         self._busy = False
         self.status.setText("설치를 시작합니다. 잠시 뒤 새 버전이 열립니다…")
-        self.install_requested.emit(new_dir, work_dir)
+        self.install_requested.emit(self.info.kind if self.info else "zip", prepared, work_dir)
 
     # ------------------------------------------------------------- 기타
     def _open_page(self) -> None:

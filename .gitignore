@@ -16,3 +16,6 @@ dist/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Release output
+installer_output/

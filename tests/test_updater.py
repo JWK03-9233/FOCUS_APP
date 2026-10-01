@@ -119,3 +119,41 @@ def test_install_script_replaces_files_after_process_exits(tmp_path):
     assert (target / "user_note.txt").read_text() == "keep"  # 설치 폴더의 다른 파일은 지우지 않음
     assert not (tmp_path / "work").exists()  # 작업 폴더 정리
     assert "files replaced" in log.read_text(encoding="utf-8-sig")
+
+
+def test_installer_asset_preferred_and_urgency_parsed():
+    data = {
+        "tag_name": "v1.2.3",
+        "body": "- 고친 점\n\n<!-- focusapp-urgency: critical -->",
+        "assets": [
+            {"name": "FocusApp-v1.2.3-win64.zip", "url": "zip", "size": 2},
+            {"name": "FocusApp_Setup_1.2.3.exe", "url": "setup", "size": 3, "digest": "sha256:aa"},
+            {"name": "SHA256SUMS.txt", "url": "sums", "size": 1},
+        ],
+    }
+    info = release_from_json(data)
+    assert info.kind == "installer" and info.asset_url == "setup" and info.sha256 == "aa"
+    assert info.urgency == "critical"
+    assert "urgency" not in info.notes and info.notes == "- 고친 점"  # 표시는 화면에 안 보이게 제거
+
+    old = release_from_json({"tag_name": "v0.3.0", "assets": [{"name": "FocusApp-v0.3.0-win64.zip", "url": "z"}]})
+    assert old.kind == "zip" and old.urgency == "optional"
+
+
+def test_prepare_returns_installer_as_is_or_extracts_zip(tmp_path):
+    setup = tmp_path / "FocusApp_Setup_1.0.0.exe"
+    setup.write_bytes(b"x")
+    info = ReleaseInfo("1.0.0", "v1.0.0", "", "", setup.name, "u", 1, "", kind="installer")
+    assert updater.prepare(info, tmp_path, setup) == setup
+    z = _zip_with(tmp_path, {"FocusApp/FocusApp.exe": b"x"})
+    assert updater.prepare(_info_for(z), tmp_path, z).name == "FocusApp"
+
+
+def test_setup_script_waits_only_for_installer_and_passes_silent_args():
+    script = updater.build_setup_script(
+        77, Path(r"C:\w\FocusApp_Setup_1.0.0.exe"), Path(r"C:\App"), Path(r"C:\w"), Path(r"C:\l.txt")
+    )
+    assert "Get-Process -Id 77" in script
+    assert "/VERYSILENT" in script and "/RESTARTAPP=1" in script and "/DIR=" in script
+    assert "$argList -Wait" not in script  # 자식(재실행된 앱)까지 기다리지 않도록
+    assert "WaitForExit()" in script

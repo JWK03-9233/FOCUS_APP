@@ -62,11 +62,14 @@ class AppPickerDialog(QDialog):
         layout.addWidget(self.search)
 
         self.list = QListWidget()
+        self.list.setObjectName("pickList")
         self.list.setIconSize(QSize(24, 24))
         self.list.setSpacing(1)
+        # 목록이 포커스를 가져가면 Windows 11 스타일이 테두리를 강조색으로 다시 그려 목록이 순간
+        # 커지는 것처럼 보임 -> 포커스는 검색 칸에 두고, 선택 표시도 쓰지 않음
+        self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self.list.itemChanged.connect(self._update_count)
-        self._pressed_state: Optional[Qt.CheckState] = None
-        self.list.itemPressed.connect(lambda it: setattr(self, "_pressed_state", it.checkState()))
         self.list.itemClicked.connect(self._toggle_on_click)
         layout.addWidget(self.list, 1)
 
@@ -119,11 +122,13 @@ class AppPickerDialog(QDialog):
         item = QListWidgetItem(app_catalog.app_icon(entry.path, entry.name), label)
         item.setData(_ROLE_EXE, entry.exe)
         item.setSizeHint(QSize(0, 34))
+        # ItemIsUserCheckable은 일부러 주지 않음: Qt가 체크박스 칸 클릭을 따로 토글하면
+        # 줄 클릭 처리(_toggle_on_click)와 겹쳐 두 번 바뀌어(=그대로) 버림. 토글은 한 곳에서만 함.
         if allowed:
-            item.setFlags(Qt.ItemFlag.ItemIsUserCheckable)  # 비활성 + 체크 표시
+            item.setFlags(Qt.ItemFlag.NoItemFlags)  # 비활성 + 체크 표시
             item.setCheckState(Qt.CheckState.Checked)
         else:
-            item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
         self.list.addItem(item)
         return item
@@ -172,11 +177,9 @@ class AppPickerDialog(QDialog):
             item.setHidden(bool(q) and q not in hay)
 
     def _toggle_on_click(self, item: QListWidgetItem) -> None:
-        # 체크박스가 아니라 줄 아무 곳을 눌러도 체크되게 함
+        # 체크박스 칸이든 이름이든 줄 아무 곳을 눌러도 한 번만 바뀜
         if not (item.flags() & Qt.ItemFlag.ItemIsEnabled) or item.data(_ROLE_EXE) is None:
             return
-        if self._pressed_state is not None and item.checkState() != self._pressed_state:
-            return  # 체크박스를 직접 눌러 이미 바뀐 경우
         new = Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked else Qt.CheckState.Checked
         item.setCheckState(new)
 

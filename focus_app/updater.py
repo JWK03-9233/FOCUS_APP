@@ -3,12 +3,18 @@
 Qt에 의존하지 않습니다. 네트워크·파일 작업은 오래 걸릴 수 있으므로 UI에서는
 백그라운드 스레드에서 호출합니다.
 
-설치 방식 (PyInstaller 단일 폴더 배포본 전용):
-1. 릴리스의 ``FocusApp-v<버전>-win64.zip``을 임시 폴더에 내려받고 SHA-256을 확인합니다.
-2. 압축을 풀어 ``FocusApp.exe``가 든 폴더를 찾습니다.
-3. 숨김 PowerShell 스크립트를 띄운 뒤 앱을 종료합니다. 스크립트는 앱 프로세스가 끝나기를
-   기다렸다가 새 파일을 설치 폴더에 덮어쓰고 앱을 다시 실행합니다.
+릴리스는 scripts/release.py가 만듭니다. 설치 방식 (exe 배포본에서만):
+
+* 설치 프로그램(``FocusApp_Setup_<버전>.exe``)이 있으면 (기본):
+  내려받아 SHA-256을 확인한 뒤, 숨김 PowerShell 스크립트가 앱 종료를 기다렸다가
+  ``/VERYSILENT /DIR=<현재 설치 폴더> /RESTARTAPP=1``로 조용히 설치하고 다시 실행합니다.
+* zip(``FocusApp-v<버전>-win64.zip``)만 있으면 (예전 릴리스):
+  압축을 풀어 파일을 설치 폴더에 덮어쓰고 다시 실행합니다.
+
 설정과 세션은 %APPDATA%에 있으므로 업데이트해도 그대로 유지됩니다.
+
+릴리스 설명에 ``<!-- focusapp-urgency: critical -->`` 같은 표시가 있으면 업데이트 중요도로
+씁니다 (optional / recommended / critical). release.py --urgency가 넣어 줍니다.
 """
 
 from __future__ import annotations
@@ -35,6 +41,9 @@ from focus_app.version import APP_NAME, GITHUB_OWNER, GITHUB_REPO, __version__
 log = logging.getLogger(__name__)
 
 ASSET_SUFFIX = "-win64.zip"
+INSTALLER_RE = re.compile(r"^FocusApp_Setup_[\d.]+\.exe$", re.IGNORECASE)
+URGENCY_RE = re.compile(r"<!--\s*focusapp-urgency:\s*(optional|recommended|critical)\s*-->", re.IGNORECASE)
+URGENCIES = ("optional", "recommended", "critical")
 EXE_NAME = f"{APP_NAME}.exe"
 LATEST_URL = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
@@ -67,6 +76,8 @@ class ReleaseInfo:
     asset_url: str = ""  # API 다운로드 주소 (비공개 저장소도 토큰으로 받을 수 있음)
     asset_size: int = 0
     sha256: str = ""  # GitHub가 제공하는 digest (없을 수 있음)
+    kind: str = "zip"  # "installer" 또는 "zip"
+    urgency: str = "optional"  # optional / recommended / critical
 
     @property
     def newer(self) -> bool:
@@ -121,22 +132,31 @@ def fetch_latest(token: str = "", timeout: float = 10.0) -> ReleaseInfo:
 def release_from_json(data: dict) -> ReleaseInfo:
     tag = str(data.get("tag_name") or "")
     version = tag[1:] if tag[:1] in ("v", "V") else tag
-    asset = next(
-        (a for a in data.get("assets") or [] if str(a.get("name", "")).lower().endswith(ASSET_SUFFIX)),
-        None,
-    )
+    assets = data.get("assets") or []
+    # 설치 프로그램이 있으면 그것을, 없으면 (예전 릴리스) zip을 씀
+    asset = next((a for a in assets if INSTALLER_RE.match(str(a.get("name", "")))), None)
+    kind = "installer"
+    if asset is None:
+        asset = next((a for a in assets if str(a.get("name", "")).lower().endswith(ASSET_SUFFIX)), None)
+        kind = "zip"
+    body = str(data.get("body") or "")
+    m = URGENCY_RE.search(body)
+    urgency = m.group(1).lower() if m else "optional"
+    notes = URGENCY_RE.sub("", body).strip()
     sha = ""
     if asset and str(asset.get("digest") or "").startswith("sha256:"):
         sha = str(asset["digest"]).split(":", 1)[1].lower()
     return ReleaseInfo(
         version=version,
         tag=tag,
-        notes=str(data.get("body") or ""),
+        notes=notes,
         page_url=str(data.get("html_url") or RELEASES_PAGE),
         asset_name=str(asset.get("name", "")) if asset else "",
         asset_url=str(asset.get("url", "")) if asset else "",
         asset_size=int(asset.get("size") or 0) if asset else 0,
         sha256=sha,
+        kind=kind if asset else "zip",
+        urgency=urgency,
     )
 
 
@@ -255,12 +275,54 @@ try {{
 """
 
 
-def launch_installer(new_dir: Path, work_dir: Path, log_path: Path) -> None:
-    """숨은 PowerShell로 설치 스크립트를 실행합니다. 호출 뒤 앱은 바로 종료해야 합니다."""
+def build_setup_script(pid: int, setup_exe: Path, target_dir: Path, work_dir: Path, log_path: Path) -> str:
+    """앱이 끝나기를 기다렸다가 설치 프로그램을 조용히 실행하는 PowerShell 스크립트.
+
+    설치 프로그램이 /RESTARTAPP=1로 새 버전을 다시 실행합니다. 설치가 실패하면 이전 버전을 실행합니다.
+    """
+    exe = target_dir / EXE_NAME
+    setup_log = log_path.with_name("update_setup.log")
+    return f"""
+$ErrorActionPreference = 'Stop'
+$log = {_ps_quote(log_path)}
+function Log($m) {{ Add-Content -LiteralPath $log -Value ((Get-Date -Format s) + ' ' + $m) -Encoding UTF8 }}
+$ok = $false
+try {{
+    Log 'update: waiting for pid {pid}'
+    for ($i = 0; $i -lt 120 -and (Get-Process -Id {pid} -ErrorAction SilentlyContinue); $i++) {{ Start-Sleep -Milliseconds 500 }}
+    Start-Sleep -Milliseconds 500
+    $argList = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/RESTARTAPP=1',
+                 ('/DIR="' + {_ps_quote(target_dir)} + '"'), ('/LOG="' + {_ps_quote(setup_log)} + '"'))
+    # -Wait는 설치 프로그램이 다시 띄운 FocusApp(자식)까지 기다리므로 쓰지 않고, 설치 프로그램만 기다림
+    $p = Start-Process -FilePath {_ps_quote(setup_exe)} -ArgumentList $argList -PassThru
+    $p.WaitForExit()
+    Log ('update: setup exit code ' + $p.ExitCode)
+    $ok = ($p.ExitCode -eq 0)
+}} catch {{
+    Log ('update: error ' + $_.Exception.Message)
+}} finally {{
+    if (-not $ok) {{ Log 'update: FAILED, starting previous version'; Start-Process -FilePath {_ps_quote(exe)} }}
+    Remove-Item -LiteralPath {_ps_quote(work_dir)} -Recurse -Force -ErrorAction SilentlyContinue
+}}
+"""
+
+
+def prepare(info: ReleaseInfo, work_dir: Path, downloaded: Path) -> Path:
+    """내려받은 파일을 설치할 수 있는 형태로: 설치 프로그램은 그대로, zip은 압축 해제한 폴더."""
+    if info.kind == "installer":
+        return downloaded
+    return extract(downloaded, work_dir / "new")
+
+
+def launch_update(kind: str, prepared: Path, work_dir: Path, log_path: Path) -> None:
+    """숨은 PowerShell로 설치를 시작합니다. 호출 뒤 앱은 바로 종료해야 합니다."""
     target = install_dir()
     if not can_write(target):
         raise UpdateError(f"설치 폴더에 쓸 권한이 없습니다:\n{target}\n\n관리자 권한으로 실행하거나 직접 설치하세요.")
-    script = build_install_script(os.getpid(), new_dir, target, work_dir, log_path)
+    if kind == "installer":
+        script = build_setup_script(os.getpid(), prepared, target, work_dir, log_path)
+    else:
+        script = build_install_script(os.getpid(), prepared, target, work_dir, log_path)
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     powershell = shutil.which("powershell") or "powershell"
     flags = 0
@@ -271,4 +333,4 @@ def launch_installer(new_dir: Path, work_dir: Path, log_path: Path) -> None:
         creationflags=flags,
         close_fds=True,
     )
-    log.info("업데이트 설치 스크립트 실행: %s -> %s", new_dir, target)
+    log.info("업데이트 설치 스크립트 실행 (%s): %s -> %s", kind, prepared, target)

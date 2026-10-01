@@ -390,3 +390,26 @@ def test_update_button_highlights_new_version(qapp):
     assert "9.9.9" in w.update_btn.text()
     w.set_update_available(None)
     assert w.update_btn.text() == "업데이트 확인"
+
+
+def test_picker_checkbox_square_and_row_both_toggle_once(qapp):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+
+    dlg = AppPickerDialog("공부용", [], running=[AppEntry("chrome.exe", "Chrome", "", True)])
+    dlg.show()
+    lst = dlg.list
+    item = next(lst.item(i) for i in range(lst.count()) if lst.item(i).data(Qt.ItemDataRole.UserRole) == "chrome.exe")
+    rect = lst.visualItemRect(item)
+    opt = QStyleOptionViewItem()
+    opt.initFrom(lst)
+    opt.rect = rect
+    opt.features |= QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
+    box = lst.style().subElementRect(QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, lst)
+
+    QTest.mouseClick(lst.viewport(), Qt.MouseButton.LeftButton, pos=box.center())  # 체크박스 칸
+    assert item.checkState() == Qt.CheckState.Checked
+    QTest.mouseClick(lst.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(rect.center().x() + 80, rect.center().y()))
+    assert item.checkState() == Qt.CheckState.Unchecked  # 이름 부분
+    assert lst.focusPolicy() == Qt.FocusPolicy.NoFocus  # 포커스 테두리로 목록이 출렁이지 않게

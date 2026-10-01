@@ -63,6 +63,8 @@ def scan_installed_apps() -> List[AppEntry]:
                 continue
             if not target.lower().endswith(".exe"):
                 continue
+            if not os.path.isfile(target):
+                continue  # 앱을 지워도 시작 메뉴 바로가기가 남는 경우가 많음 -> 실제 exe가 있을 때만
             exe = normalize_exe(target)
             if exe in SYSTEM_EXES or exe in result:
                 continue

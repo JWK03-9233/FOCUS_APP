@@ -38,6 +38,16 @@ QListWidget#modeList::item:selected {{
     border-left: 4px solid {ACCENT};
 }}
 
+QListWidget#pickList {{
+    border: 1px solid palette(mid);
+    border-radius: 8px;
+    background: palette(base);
+    outline: none;
+    padding: 4px;
+}}
+QListWidget#pickList::item {{ border-radius: 6px; padding: 2px 4px; }}
+QListWidget#pickList::item:hover {{ background: palette(alternate-base); }}
+
 QListWidget#appList {{
     background: transparent;
     border: none;

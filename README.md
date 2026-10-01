@@ -55,7 +55,28 @@ pytest
 핵심 로직(`config`, `enforcer`, `unlock`, `session`, `monitor`)은 Qt와 Windows API에 의존하지 않아
 어느 OS에서든 테스트할 수 있습니다. 실제 창 감시·최소화는 `winapi.py`(ctypes)를 통해 Windows에서만 동작합니다.
 
-배포본은 `scripts\build_exe.bat`로 만들며 `dist\FocusApp\FocusApp.exe`가 생성됩니다.
+빌드만 하려면 `scripts\build_exe.bat` (결과: `dist\FocusApp\FocusApp.exe`).
+
+## 릴리스
+
+릴리스는 로컬에서 `release.py` 하나로 합니다. (준비물: `gh auth login`, Inno Setup 6)
+
+```
+python release.py                  # 현재 버전, GitHub 최신 릴리스, 다음 버전 제안
+python release.py 0.4.0 --dry-run  # 무엇을 할지 미리 보기
+python release.py 0.4.0            # 실제 릴리스
+```
+
+순서: preflight → 테스트 → 버전 bump → PyInstaller → 비밀 파일 검사 → zip → Inno Setup 설치 프로그램
+→ GitHub 릴리스(draft로 올림 → 체크섬 확인 → 공개) → 다운로드 주소 확인.
+
+* 변경 내용은 `CHANGELOG.md`의 `## [0.4.0]` 절에 적으면 릴리스 설명과 앱의 업데이트 창에 나옵니다.
+* `--urgency recommended`면 앱이 알림으로, `critical`이면 실행하자마자 업데이트 창으로 알려 줍니다.
+* 스크립트는 git을 건드리지 않습니다. 끝나면 안내되는 대로 버전 파일을 커밋·push하세요.
+* GitHub Actions는 push·PR마다 테스트만 돌립니다.
+
+앱의 `업데이트 확인`은 최신 릴리스의 `FocusApp_Setup_<버전>.exe`를 받아 체크섬을 확인한 뒤,
+앱을 끄고 조용히 설치(`/VERYSILENT /DIR=<현재 폴더>`)한 다음 새 버전을 다시 실행합니다.
 
 ## 알려진 한계
 
