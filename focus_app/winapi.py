@@ -20,6 +20,11 @@ GA_ROOTOWNER = 3
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 GW_OWNER = 4
 WS_EX_TOOLWINDOW = 0x00000080
+TOKEN_QUERY = 0x0008
+TOKEN_INTEGRITY_LEVEL = 25  # TOKEN_INFORMATION_CLASS.TokenIntegrityLevel
+SECURITY_MANDATORY_HIGH_RID = 0x3000
+STILL_ACTIVE = 259
+ERROR_ALREADY_EXISTS = 183
 
 
 @dataclass(frozen=True)
@@ -88,6 +93,26 @@ if IS_WINDOWS:  # pragma: no cover - Windows 전용
     kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
     kernel32.GetCurrentThreadId.restype = wintypes.DWORD
     kernel32.GetCurrentProcessId.restype = wintypes.DWORD
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+    advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+    advapi32.GetSidSubAuthorityCount.argtypes = [ctypes.c_void_p]
+    advapi32.GetSidSubAuthorityCount.restype = ctypes.POINTER(ctypes.c_ubyte)
+    advapi32.GetSidSubAuthority.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+    advapi32.GetSidSubAuthority.restype = ctypes.POINTER(wintypes.DWORD)
 
 
 def current_pid() -> int:
@@ -96,6 +121,74 @@ def current_pid() -> int:
     import os
 
     return os.getpid()
+
+
+def process_elevated(pid: int) -> Optional[bool]:
+    """프로세스가 관리자 권한(높은 무결성 수준 이상)으로 실행 중인지.
+
+    일반 권한 프로세스는 관리자 권한 프로세스의 토큰을 읽을 수 없으므로, 프로세스는 열리는데
+    토큰이 안 열리면 관리자 권한(또는 시스템)으로 봅니다. 프로세스조차 못 열면 None.
+    """
+    if not IS_WINDOWS or not pid:
+        return False
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)  # pragma: no cover
+    if not handle:  # pragma: no cover
+        return None
+    try:  # pragma: no cover
+        token = wintypes.HANDLE()
+        if not advapi32.OpenProcessToken(handle, TOKEN_QUERY, ctypes.byref(token)):
+            return True
+        try:
+            size = wintypes.DWORD(0)
+            advapi32.GetTokenInformation(token, TOKEN_INTEGRITY_LEVEL, None, 0, ctypes.byref(size))
+            buf = ctypes.create_string_buffer(size.value or 64)
+            if not advapi32.GetTokenInformation(token, TOKEN_INTEGRITY_LEVEL, buf, len(buf), ctypes.byref(size)):
+                return None
+            psid = ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p))[0]  # TOKEN_MANDATORY_LABEL.Label.Sid
+            count = advapi32.GetSidSubAuthorityCount(psid)[0]
+            rid = advapi32.GetSidSubAuthority(psid, count - 1)[0]
+            return rid >= SECURITY_MANDATORY_HIGH_RID
+        finally:
+            kernel32.CloseHandle(token)
+    finally:  # pragma: no cover
+        kernel32.CloseHandle(handle)
+
+
+def current_process_elevated() -> bool:
+    return bool(process_elevated(current_pid()))
+
+
+def process_alive(pid: int) -> bool:
+    if not pid:
+        return False
+    if not IS_WINDOWS:
+        import os
+
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)  # pragma: no cover
+    if not handle:  # pragma: no cover
+        return False
+    try:  # pragma: no cover
+        code = wintypes.DWORD(0)
+        return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == STILL_ACTIVE
+    finally:  # pragma: no cover
+        kernel32.CloseHandle(handle)
+
+
+def acquire_single_instance(name: str):
+    """이름 있는 뮤텍스로 한 번만 실행되게 합니다. 이미 있으면 None, 아니면 (닫지 말고 들고 있을) 핸들."""
+    if not IS_WINDOWS:
+        return object()
+    handle = kernel32.CreateMutexW(None, False, name)  # pragma: no cover
+    if not handle or ctypes.get_last_error() == ERROR_ALREADY_EXISTS:  # pragma: no cover
+        if handle:
+            kernel32.CloseHandle(handle)
+        return None
+    return handle  # pragma: no cover
 
 
 def get_foreground_window() -> int:

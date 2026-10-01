@@ -86,3 +86,21 @@ function ShouldRestartApp: Boolean;
 begin
   Result := ExpandConstant('{param:RESTARTAPP|0}') = '1';
 end;
+
+{ 관리자 권한 도우미 작업(앱 설정에서 설치)이 있으면 제거할 때 함께 지움. 관리자 확인(UAC)이 한 번 뜹니다. }
+function HelperTaskExists: Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := Exec(ExpandConstant('{sys}\schtasks.exe'), '/Query /TN "FocusApp\Helper"', '', SW_HIDE,
+                 ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+begin
+  if (CurUninstallStep = usUninstall) and HelperTaskExists then
+    ShellExec('runas', ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "FocusApp\Helper" /F', '',
+              SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;

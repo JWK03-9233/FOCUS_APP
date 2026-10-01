@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -15,8 +16,8 @@ from focus_app.config import data_dir
 from focus_app.version import APP_ID, APP_NAME
 
 
-def _setup_logging() -> None:
-    log_path = data_dir() / "focus_app.log"
+def _setup_logging(filename: str = "focus_app.log") -> None:
+    log_path = data_dir() / filename
     handler = RotatingFileHandler(log_path, maxBytes=512 * 1024, backupCount=2, encoding="utf-8")
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     handler.setFormatter(fmt)
@@ -69,7 +70,23 @@ def _set_windows_app_id() -> None:
             pass
 
 
+def _helper_main(argv: list) -> int:
+    """``--helper [--data-dir <폴더>]``: 창 없이 관리자 권한 도우미 감시만 실행 (Qt를 띄우지 않음)."""
+    if "--data-dir" in argv:
+        i = argv.index("--data-dir")
+        if i + 1 < len(argv):
+            # 관리자 권한이 다른 계정으로 뜨더라도 본 앱과 같은 설정·세션 폴더를 보도록
+            os.environ["FOCUSAPP_DATA_DIR"] = argv[i + 1]
+    _setup_logging("helper.log")
+    _install_exception_hooks()
+    from focus_app.helper import run_helper
+
+    return run_helper()
+
+
 def main() -> int:
+    if "--helper" in sys.argv[1:]:
+        return _helper_main(sys.argv[1:])
     _setup_logging()
     _install_exception_hooks()
     _set_windows_app_id()

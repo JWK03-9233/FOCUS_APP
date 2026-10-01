@@ -191,3 +191,23 @@ def test_already_minimized_foreground_is_not_counted_again():
     assert mon.block_count == 1
     assert len(blocked) == 1
     assert os_.fallbacks == 3
+
+
+def test_handles_filter_leaves_window_to_someone_else():
+    os_, mon, blocked = make(handles=lambda w: w.exe_name != "admin_tool.exe")
+    os_.add(2, "admin_tool.exe")
+    os_.foreground_hwnd = 2
+    assert mon.poll() is Decision.IGNORE  # 도우미가 맡는 창: 건드리지 않음
+    assert os_.minimized == [] and mon.block_count == 0
+
+
+def test_failed_minimize_is_reported_not_counted():
+    failed = []
+    os_, mon, blocked = make(on_block_failed=failed.append)
+    os_.add(2, "elevated.exe")
+    os_.foreground_hwnd = 2
+    mon.backend.minimize = lambda h: False  # 관리자 권한 창: 최소화가 먹히지 않음
+    mon.poll()
+    mon.poll()
+    assert mon.block_count == 0 and blocked == []
+    assert [w.exe_name for w in failed] == ["elevated.exe"]  # 같은 창은 한 번만 알림

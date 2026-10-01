@@ -78,6 +78,23 @@ class PreferencesDialog(QDialog):
         form2.addRow("", _hint("앞에 나온 창을 얼마나 자주 확인할지 정합니다. 보통은 바꿀 필요가 없습니다."))
         layout.addLayout(form2)
 
+        title_h = QLabel("관리자 권한 앱 차단")
+        title_h.setObjectName("sectionTitle")
+        layout.addWidget(title_h)
+        layout.addWidget(_hint(
+            "'관리자 권한으로 실행'한 앱은 Windows 보안 때문에 FocusApp이 최소화할 수 없습니다. "
+            "도우미를 설치하면(관리자 확인 1번) 그런 앱도 막고, 집중 중에 FocusApp을 강제로 꺼도 계속 막습니다."
+        ))
+        helper_row = QHBoxLayout()
+        self.helper_status = QLabel("")
+        self.helper_status.setWordWrap(True)
+        helper_row.addWidget(self.helper_status, 1)
+        self.helper_btn = QPushButton("")
+        self.helper_btn.clicked.connect(self._toggle_helper)
+        helper_row.addWidget(self.helper_btn)
+        layout.addLayout(helper_row)
+        self._refresh_helper()
+
         title3 = QLabel("업데이트")
         title3.setObjectName("sectionTitle")
         layout.addWidget(title3)
@@ -104,6 +121,41 @@ class PreferencesDialog(QDialog):
         buttons.addWidget(save)
         buttons.addWidget(cancel)
         layout.addLayout(buttons)
+
+    def _refresh_helper(self) -> None:
+        from focus_app import helper
+
+        installed = helper.is_registered()
+        self.helper_status.setText("도우미: " + helper.status_text())
+        self.helper_btn.setText("도우미 제거…" if installed else "도우미 설치…")
+        self.helper_btn.setObjectName("" if installed else "secondary")
+        self.helper_btn.style().unpolish(self.helper_btn)
+        self.helper_btn.style().polish(self.helper_btn)
+
+    def _toggle_helper(self) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
+        from focus_app import helper
+
+        installed = helper.is_registered()
+        if not installed:
+            answer = QMessageBox.question(
+                self,
+                "관리자 권한 도우미",
+                "Windows 작업 스케줄러에 'FocusApp\\Helper' 작업을 등록합니다.\n\n"
+                "• 집중 중에만 관리자 권한으로 잠깐 실행되고, 집중이 끝나면 스스로 꺼집니다.\n"
+                "• 이어서 나오는 Windows 관리자 확인(UAC)에서 '예'를 눌러 주세요.\n\n설치할까요?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            ok, message = helper.unregister() if installed else helper.register()
+        finally:
+            QApplication.restoreOverrideCursor()
+        (QMessageBox.information if ok else QMessageBox.warning)(self, "관리자 권한 도우미", message)
+        self._refresh_helper()
 
     def _save(self) -> None:
         s = self.settings

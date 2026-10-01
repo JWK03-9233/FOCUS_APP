@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import copy
 import logging
+import time
 from typing import Optional
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon
 
-from focus_app import updater
+from focus_app import helper, updater, winapi
 from focus_app.config import Settings, data_dir
 from focus_app.enforcer import ForegroundWindow
 from focus_app.monitor import AllowlistMonitor
@@ -68,6 +69,10 @@ class FocusApp:
         self.status_timer.setInterval(1000)
         self.status_timer.timeout.connect(self._refresh_status)
         self.status_timer.start()
+
+        self._helper_ok = False  # 관리자 권한 도우미가 지금 감시 중인지 (2초마다 갱신)
+        self._helper_checked = 0.0
+        self._warned_elevated = False
 
         self._update_bridge = _Bridge(app)
         self._update_bridge.checked.connect(self._on_update_checked)
@@ -192,7 +197,14 @@ class FocusApp:
         profile = self.settings.get_profile(session.profile) or self.settings.current_profile()
         self.session = session
         self._safe_save_session()
-        self.monitor = AllowlistMonitor(profile=copy.deepcopy(profile), on_block=self._on_block)
+        self._warned_elevated = False
+        self.monitor = AllowlistMonitor(
+            profile=copy.deepcopy(profile),
+            on_block=self._on_block,
+            handles=self._main_handles,
+            on_block_failed=self._on_block_failed,
+        )
+        self._start_helper()
         self.poll_timer.start(self.settings.poll_interval_ms)
         self.window.show_running(session, profile)
         self._refresh_status()
@@ -239,7 +251,42 @@ class FocusApp:
     def _poll(self) -> None:
         if self.monitor is None or self.session is None:
             return
+        now = time.monotonic()
+        if now - self._helper_checked >= 2.0:
+            self._helper_checked = now
+            self._helper_ok = helper.helper_alive()
         self.monitor.poll()
+
+    # ------------------------------------------------------ 관리자 권한 도우미
+    def _main_handles(self, window: ForegroundWindow) -> bool:
+        """본 앱이 맡을 창: 도우미가 감시 중이면 관리자 권한 창은 도우미에게 맡김."""
+        return not (self._helper_ok and winapi.process_elevated(window.pid))
+
+    def _start_helper(self) -> None:
+        def work() -> None:
+            try:
+                if helper.start():
+                    log.info("관리자 권한 도우미 실행 요청")
+            except Exception:  # noqa: BLE001
+                log.exception("도우미 실행 실패")
+
+        run_in_thread(work, "helper-start")
+
+    def _on_block_failed(self, window: ForegroundWindow) -> None:
+        """일반 권한으로는 최소화할 수 없는 창 (관리자 권한으로 실행된 앱)."""
+        name = self.settings.app_display_name(window.exe_name)
+        if helper.is_registered():
+            self._start_helper()
+            msg = f"관리자 권한으로 실행된 {name}을(를) 막는 중입니다. 도우미가 곧 처리합니다."
+        else:
+            if self._warned_elevated:
+                return
+            self._warned_elevated = True
+            msg = (
+                f"{name}은(는) 관리자 권한으로 실행되어 최소화할 수 없습니다. "
+                "집중이 끝난 뒤 ⚙ 설정에서 '관리자 권한 도우미'를 설치하면 막을 수 있습니다."
+            )
+        self.tray.showMessage(APP_NAME, msg, QSystemTrayIcon.MessageIcon.Warning, 5000)
 
     def _on_block(self, window: ForegroundWindow) -> None:
         if self.settings.show_block_notifications:

@@ -51,11 +51,18 @@ class AllowlistMonitor:
         own_pid: Optional[int] = None,
         backend: Optional[_Backend] = None,
         on_block: Optional[BlockCallback] = None,
+        handles: Optional[Callable[[ForegroundWindow], bool]] = None,
+        on_block_failed: Optional[BlockCallback] = None,
     ) -> None:
         self.profile = profile
         self.own_pid = winapi.current_pid() if own_pid is None else own_pid
         self.backend = backend or _Backend()
         self.on_block = on_block
+        # 막아야 할 창 중 이 감시가 맡을 창만 고르는 조건 (관리자 권한 도우미와 일을 나눌 때 사용)
+        self.handles = handles
+        # 최소화를 시도했지만 실제로 안 된 경우 (관리자 권한 창 등) 알림
+        self.on_block_failed = on_block_failed
+        self._last_failed: tuple[int, float] = (0, 0.0)
         self.last_allowed_hwnd: int = 0
         self.block_count: int = 0
         self._last_notified: tuple[int, float] = (0, 0.0)
@@ -97,6 +104,8 @@ class AllowlistMonitor:
             return decision
 
         if decision is Decision.BLOCK:
+            if self.handles is not None and not self.handles(window):
+                return Decision.IGNORE  # 다른 쪽(도우미 등)이 맡는 창
             self._block(window)
         return decision
 
@@ -112,8 +121,12 @@ class AllowlistMonitor:
                     self.backend.minimize(window.hwnd)
             except Exception:  # noqa: BLE001
                 log.exception("창 최소화 실패")
-            self.block_count += 1
-            self._notify(window)
+            if not self.backend.is_minimized(target):
+                # 관리자 권한으로 실행된 창은 일반 권한으로 최소화할 수 없음 (UIPI) -> 센 것으로 치지 않음
+                self._report_failed(window)
+            else:
+                self.block_count += 1
+                self._notify(window)
         if not self._restore_last_allowed():
             try:
                 self.backend.focus_fallback()
@@ -132,6 +145,19 @@ class AllowlistMonitor:
         except Exception:  # noqa: BLE001
             log.exception("허용 앱 복귀 실패")
             return False
+
+    def _report_failed(self, window: ForegroundWindow) -> None:
+        now = time.monotonic()
+        last_hwnd, last_time = self._last_failed
+        if last_hwnd == window.hwnd and now - last_time < 30.0:
+            return
+        self._last_failed = (window.hwnd, now)
+        log.warning("최소화 실패 (관리자 권한 창일 수 있음): %s", window.exe_name)
+        if self.on_block_failed is not None:
+            try:
+                self.on_block_failed(window)
+            except Exception:  # noqa: BLE001
+                log.exception("최소화 실패 알림 콜백 실패")
 
     def _notify(self, window: ForegroundWindow) -> None:
         if self.on_block is None:
