@@ -9,7 +9,7 @@ import time
 from typing import List, Optional
 
 from PySide6.QtCore import QByteArray, QSize, Qt, Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QKeyEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -123,8 +123,8 @@ class ModeRow(QWidget):
 class MainWindow(QMainWindow):
     start_requested = Signal(str, object)  # 모드 이름, 분(None이면 제한 없음)
     stop_requested = Signal()
-    emergency_requested = Signal()
-    cancel_emergency_requested = Signal()
+    cancel_emergency_requested = Signal()  # 예전 버전에서 요청해 둔 비상 해제가 남아 있을 때만 쓰임
+    launch_app_requested = Signal(str)  # 진행 화면에서 허용 앱을 눌렀을 때 (실행 파일 이름)
     settings_changed = Signal()
     preferences_requested = Signal()
     quit_requested = Signal()
@@ -684,6 +684,8 @@ class MainWindow(QMainWindow):
         self.run_apps.setIconSize(QSize(20, 20))
         self.run_apps.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self.run_apps.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.run_apps.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+        self.run_apps.itemClicked.connect(self._on_run_app_clicked)
         cl.addWidget(self.run_apps, 1)
         cl.addWidget(_label("작업 표시줄, 시작 메뉴, 작업 관리자, Windows 설정은 항상 쓸 수 있습니다.", "hint", True))
         root.addWidget(card, 1)
@@ -711,11 +713,6 @@ class MainWindow(QMainWindow):
         self.edit_apps_btn.setToolTip("해제 문자열을 입력하면 집중을 끝내지 않고 허용 앱 목록만 고칠 수 있습니다")
         self.edit_apps_btn.clicked.connect(self.edit_apps_requested.emit)
         buttons.addWidget(self.edit_apps_btn)
-        self.emergency_btn = QPushButton("비상 해제…")
-        self.emergency_btn.setObjectName("linkButton")
-        self.emergency_btn.setToolTip("문자열을 입력하지 않고 끝내는 비상 수단 (일정 시간 뒤 적용)")
-        self.emergency_btn.clicked.connect(self.emergency_requested.emit)
-        buttons.addWidget(self.emergency_btn)
         self.stop_btn = QPushButton("집중 끝내기…")
         self.stop_btn.setObjectName("danger")
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -740,7 +737,8 @@ class MainWindow(QMainWindow):
             for exe in apps:
                 name = self.settings.app_display_name(exe)
                 item = QListWidgetItem(app_catalog.app_icon(self._app_path(exe), name), name)
-                item.setToolTip(exe)
+                item.setData(Qt.ItemDataRole.UserRole, exe)
+                item.setToolTip(f"눌러서 {name} 열기")
                 self.run_apps.addItem(item)
             if not apps:
                 self.run_apps.addItem("(없음 — 시스템 요소만 쓸 수 있습니다)")
@@ -773,10 +771,14 @@ class MainWindow(QMainWindow):
 
         pending = session.emergency_at is not None
         self.emergency_banner.setVisible(pending)
-        self.emergency_btn.setVisible(not pending)
         if pending:
             left = format_duration(session.emergency_remaining_seconds(now))
             self.emergency_label.setText(f"<b>비상 해제 대기 중</b> — {left} 뒤에 차단이 풀립니다.")
+
+    def _on_run_app_clicked(self, item: QListWidgetItem) -> None:
+        exe = item.data(Qt.ItemDataRole.UserRole)
+        if exe:
+            self.launch_app_requested.emit(str(exe))
 
     # ------------------------------------------------------------- 창 위치
     def _restore_geometry(self) -> None:
@@ -794,6 +796,13 @@ class MainWindow(QMainWindow):
             self.settings_changed.emit()
 
     # ------------------------------------------------------------- 창 닫기
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        # Esc = 창 닫기 (트레이에는 그대로 남음)
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+            return
+        super().keyPressEvent(event)
+
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self.save_geometry()
         if self.allow_close:

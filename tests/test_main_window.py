@@ -122,7 +122,7 @@ def test_running_page_shows_timer_and_emergency(qapp):
     sess.request_emergency(10)
     w.update_running(sess, 3)
     assert not w.emergency_banner.isHidden()
-    assert w.emergency_btn.isHidden()
+    assert not hasattr(w, "emergency_btn")  # 비상 해제를 새로 요청하는 버튼은 없음
 
 
 def test_format_clock():
@@ -613,7 +613,7 @@ def test_best_exe_in_install_folder_and_store_logo(tmp_path):
     assets.mkdir(parents=True)
     for n in ("Logo.scale-100.png", "Logo.targetsize-48.png", "Logo.targetsize-48_contrast-black.png"):
         (assets / n).write_bytes(b"png")
-    assert Path(cat._store_logo(str(tmp_path / "pkg"), "Assets\Logo.png")).name == "Logo.targetsize-48.png"
+    assert Path(cat._store_logo(str(tmp_path / "pkg"), r"Assets\Logo.png")).name == "Logo.targetsize-48.png"
 
 
 def test_end_popup_on_expiry_brings_only_focusapp_to_front(qapp, monkeypatch):
@@ -676,3 +676,69 @@ def QTest_wait(qapp, ms):
     from PySide6.QtTest import QTest
 
     QTest.qWait(ms)
+
+
+def test_launch_target_prefers_shortcut_or_store_id(tmp_path, monkeypatch):
+    exe = tmp_path / "Sumatra.exe"
+    exe.write_bytes(b"MZ")
+    monkeypatch.setattr(app_catalog, "running_apps", lambda: [])
+    app_catalog.installed_apps.set(
+        [
+            AppEntry("claude.exe", "Claude", "logo.png", launch=r"shell:AppsFolder\Claude_x!App"),
+            AppEntry("sumatra.exe", "SumatraPDF", str(exe)),
+        ]
+    )
+    assert app_catalog.launch_target("Claude.exe") == r"shell:AppsFolder\Claude_x!App"
+    assert app_catalog.launch_target("sumatra.exe") == str(exe)  # 바로가기가 없으면 실행 파일
+    assert app_catalog.launch_target("other.exe", str(exe)) == str(exe)  # 목록에 없으면 알고 있는 경로
+    assert app_catalog.launch_target("other.exe") == ""
+
+
+def test_clicking_allowed_app_on_running_page_requests_launch(qapp):
+    s, w = make_window(qapp)
+    p = s.current_profile()
+    p.block_everything = True
+    p.allowed_apps = ["hwp.exe", "notepad.exe"]
+    w.show_running(FocusSession.start(p.name, 30), p)
+    asked = []
+    w.launch_app_requested.connect(asked.append)
+    w.run_apps.itemClicked.emit(w.run_apps.item(1))
+    assert asked == ["notepad.exe"]
+
+
+def test_escape_hides_main_window_to_tray(qapp):
+    from PySide6.QtTest import QTest
+
+    s, w = make_window(qapp)
+    hidden = []
+    w.on_hidden_to_tray = lambda: hidden.append(1)
+    w.show()
+    QTest.keyClick(w, Qt.Key.Key_Escape)
+    assert not w.isVisible() and hidden
+
+
+def test_tray_menu_lists_allowed_apps_and_launches(qapp, monkeypatch):
+    launched = []
+    monkeypatch.setattr(app_catalog, "launch_app", lambda exe, path="": launched.append(exe) or True)
+    ctl = _controller(qapp)
+    try:
+        p = ctl.settings.current_profile()
+        p.block_everything = True
+        p.allowed_apps = ["hwp.exe", "notepad.exe"]
+        ctl._refresh_app_actions()
+        assert ctl._app_actions == []  # 대기 중에는 앱 목록 없음
+        ctl.start_focus(p.name, 30)
+        ctl._refresh_app_actions()
+        labels = [a.text().strip() for a in ctl._app_actions]
+        assert labels[0] == "지금 쓸 수 있는 앱" and "한글" in labels and len(labels) == 3
+        assert all(a in ctl.menu.actions() for a in ctl._app_actions)
+        ctl._app_actions[2].trigger()
+        assert launched == ["notepad.exe"]
+        ctl.launch_app("chrome.exe")  # 허용되지 않은 앱은 열지 않음
+        assert launched == ["notepad.exe"]
+        ctl._refresh_app_actions()  # 다시 채워도 중복되지 않음
+        assert len(ctl._app_actions) == 3
+        assert not hasattr(ctl, "emergency_action")
+    finally:
+        ctl._end_session("manual")
+        _close(ctl)

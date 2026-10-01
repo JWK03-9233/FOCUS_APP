@@ -45,7 +45,7 @@ class FocusApp:
         self.window = MainWindow(self.settings)
         self.window.start_requested.connect(self.start_focus)
         self.window.stop_requested.connect(self.stop_focus)
-        self.window.emergency_requested.connect(self.request_emergency)
+        self.window.launch_app_requested.connect(self.launch_app)
         self.window.cancel_emergency_requested.connect(self.cancel_emergency)
         self.window.settings_changed.connect(self._safe_save_settings)
         self.window.preferences_requested.connect(self.open_preferences)
@@ -59,7 +59,9 @@ class FocusApp:
         self._icon_state = "idle"
         self.tray = QSystemTrayIcon(self._icons["idle"])
         self.menu = QMenu()
+        self._app_actions: list = []
         self._build_menu()
+        self.menu.aboutToShow.connect(self._refresh_app_actions)
         self.tray.setContextMenu(self.menu)
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
@@ -110,16 +112,14 @@ class FocusApp:
         self.status_action = QAction("대기 중", m)
         self.status_action.setEnabled(False)
         m.addAction(self.status_action)
-        m.addSeparator()
+        # 집중 중이면 여기에 '지금 쓸 수 있는 앱'이 들어감 (메뉴를 열 때마다 _refresh_app_actions가 채움)
+        self.apps_separator = m.addSeparator()
         self.open_action = QAction("FocusApp 열기", m)
         self.open_action.triggered.connect(self.show_window)
         m.addAction(self.open_action)
         self.stop_action = QAction("집중 끝내기…", m)
         self.stop_action.triggered.connect(self.stop_focus)
         m.addAction(self.stop_action)
-        self.emergency_action = QAction("비상 해제…", m)
-        self.emergency_action.triggered.connect(self.request_emergency)
-        m.addAction(self.emergency_action)
         self.cancel_emergency_action = QAction("비상 해제 취소", m)
         self.cancel_emergency_action.triggered.connect(self.cancel_emergency)
         m.addAction(self.cancel_emergency_action)
@@ -130,6 +130,53 @@ class FocusApp:
         self.quit_action = QAction("종료", m)
         self.quit_action.triggered.connect(self.quit)
         m.addAction(self.quit_action)
+
+    def _allowed_now(self) -> list:
+        """집중 중에 쓸 수 있는 허용 앱 (실행 파일 이름). 앱을 막지 않는 모드거나 대기 중이면 빈 목록."""
+        if self.session is None:
+            return []
+        profile = self.settings.get_profile(self.session.profile)
+        if profile is None or not profile.block_everything:
+            return []
+        return profile.normalized_apps()
+
+    def _refresh_app_actions(self) -> None:
+        """트레이 메뉴의 '지금 쓸 수 있는 앱' 부분을 다시 채웁니다."""
+        for action in self._app_actions:
+            self.menu.removeAction(action)
+            action.deleteLater()
+        self._app_actions = []
+        apps = self._allowed_now()
+        if not apps:
+            return
+        before = self.apps_separator
+        header = QAction("지금 쓸 수 있는 앱", self.menu)
+        header.setEnabled(False)
+        self.menu.insertAction(before, header)
+        self._app_actions.append(header)
+        for exe in apps:
+            name = self.settings.app_display_name(exe)
+            path = self.settings.app_path(exe) or app_catalog.find_installed_path(exe)
+            action = QAction(app_catalog.app_icon(path, name), f"   {name}", self.menu)
+            action.triggered.connect(lambda _=False, e=exe: self.launch_app(e))
+            self.menu.insertAction(before, action)
+            self._app_actions.append(action)
+
+    def launch_app(self, exe: str) -> None:
+        """허용 앱을 엽니다 (진행 화면의 앱 아이콘이나 트레이 메뉴에서)."""
+        if exe not in self._allowed_now():
+            return
+        if app_catalog.launch_app(exe, self.settings.app_path(exe)):
+            log.info("허용 앱 실행: %s", exe)
+            return
+        log.warning("허용 앱을 열 수 없음: %s", exe)
+        name = self.settings.app_display_name(exe)
+        self.tray.showMessage(
+            APP_NAME,
+            f"{name}을(를) 열 수 없었어요. 시작 메뉴에서 직접 열어 주세요.",
+            QSystemTrayIcon.MessageIcon.Warning,
+            4000,
+        )
 
     def _on_tray_activated(self, reason) -> None:
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
@@ -174,7 +221,6 @@ class FocusApp:
         self.tray.setToolTip(tip)
         pending = self.active and self.session.emergency_at is not None
         self.stop_action.setVisible(self.active)
-        self.emergency_action.setVisible(self.active and not pending)
         self.cancel_emergency_action.setVisible(pending)
 
     # ------------------------------------------------------------- 세션
@@ -448,30 +494,7 @@ class FocusApp:
         except OSError:
             log.exception("설정 저장 실패")
 
-    # ---------------------------------------------------------- 비상 해제
-    def request_emergency(self) -> None:
-        if not self.active or self.session is None or self._dialog_open:
-            return
-        delay = self.settings.emergency_delay_minutes
-        self._dialog_open = True
-        try:
-            answer = QMessageBox.question(
-                self.window if self.window.isVisible() else None,
-                "비상 해제",
-                f"프로그램이 잘못 동작할 때를 위한 비상 수단입니다.\n\n"
-                f"요청하면 {delay}분 뒤에 집중이 끝납니다. 그동안 차단은 계속되고, 언제든 취소할 수 있습니다.\n\n"
-                "요청할까요?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-        finally:
-            self._dialog_open = False
-        if answer != QMessageBox.StandardButton.Yes or self.session is None:
-            return
-        self.session.request_emergency(delay)
-        self._safe_save_session()
-        self._refresh_status()
-
+    # ---------------------------------------------------------- 비상 해제 (예전 버전에서 요청해 둔 것만 취소 가능)
     def cancel_emergency(self) -> None:
         if self.session is None:
             return

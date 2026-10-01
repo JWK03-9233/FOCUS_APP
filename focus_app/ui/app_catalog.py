@@ -32,6 +32,7 @@ class AppEntry:
     path: str = ""  # 아이콘용 경로: 실행 파일, 또는 Store 앱의 로고 이미지(.png)
     running: bool = False
     usable: bool = True  # False면 실행 파일을 못 찾아 목록에는 보이지만 고를 수 없음
+    launch: str = ""  # 실행할 때 열 대상: 시작 메뉴 바로가기(.lnk), shell:AppsFolder\<앱 ID>, 또는 실행 파일
 
 
 def running_apps() -> List[AppEntry]:
@@ -119,7 +120,7 @@ def _start_menu_apps() -> List[AppEntry]:
             # 앱을 지워도 시작 메뉴 바로가기가 남는 경우가 많음 -> 실제 exe가 있을 때만
             path = _usable_exe(target)
             if path:
-                out.append(AppEntry(exe=normalize_exe(path), name=name, path=path))
+                out.append(AppEntry(exe=normalize_exe(path), name=name, path=path, launch=str(lnk)))
     return out
 
 
@@ -281,7 +282,7 @@ $out = foreach ($s in Get-StartApps) {
   try { [xml]$m = Get-Content -LiteralPath (Join-Path $p.InstallLocation 'AppxManifest.xml') -Raw -Encoding UTF8 } catch { continue }
   $app = @($m.Package.Applications.Application) | Where-Object { $_.Id -eq $parts[1] } | Select-Object -First 1
   if (-not $app -or -not $app.Executable) { continue }
-  [pscustomobject]@{ name = $s.Name; exe = [string]$app.Executable; dir = $p.InstallLocation;
+  [pscustomobject]@{ name = $s.Name; exe = [string]$app.Executable; dir = $p.InstallLocation; id = $s.AppID;
                      logo = [string]$app.VisualElements.Square44x44Logo }
 }
 @($out) | ConvertTo-Json -Compress
@@ -343,7 +344,15 @@ def _store_apps() -> List[AppEntry]:
         if not exe.endswith(".exe") or not name or exe in SYSTEM_EXES:
             continue
         icon = _store_logo(str(d.get("dir", "")), str(d.get("logo", "")))
-        out.append(AppEntry(exe=exe, name=name, path=icon or str(Path(str(d.get("dir", ""))) / str(d.get("exe", "")))))
+        app_id = str(d.get("id", "")).strip()
+        out.append(
+            AppEntry(
+                exe=exe,
+                name=name,
+                path=icon or str(Path(str(d.get("dir", ""))) / str(d.get("exe", ""))),
+                launch=f"shell:AppsFolder\\{app_id}" if app_id else "",
+            )
+        )
     return out
 
 
@@ -407,6 +416,40 @@ installed_apps = InstalledAppsCache()
 
 _icon_provider: Optional[QFileIconProvider] = None
 _icon_cache: Dict[str, QIcon] = {}
+
+
+def launch_target(exe: str, known_path: str = "") -> str:
+    """앱을 열 때 쓸 대상. 설치된 앱 목록의 바로가기·Store 앱 ID가 가장 정확하고,
+    없으면 알고 있는 실행 파일 경로, 그것도 없으면 지금 떠 있는 창의 실행 파일."""
+    exe = normalize_exe(exe)
+    for e in installed_apps.get() or []:
+        if e.exe == exe and e.usable:
+            if e.launch:
+                return e.launch
+            if e.path.lower().endswith(".exe") and os.path.isfile(e.path):
+                return e.path
+    if known_path.lower().endswith(".exe") and os.path.isfile(known_path):
+        return known_path
+    for e in running_apps():
+        if e.exe == exe and e.path:
+            return e.path
+    return ""
+
+
+def launch_app(exe: str, known_path: str = "") -> bool:
+    """허용 앱을 엽니다 (이미 떠 있으면 대개 그 창이 앞으로 옴). 열 대상을 못 찾으면 False."""
+    target = launch_target(exe, known_path)
+    if not target or not sys.platform.startswith("win"):
+        return False
+    try:
+        if target.lower().endswith(".exe"):
+            # 일부 앱은 자기 폴더에서 실행되어야 설정 파일 등을 찾음
+            os.startfile(target, cwd=str(Path(target).parent))  # type: ignore[attr-defined]
+        else:
+            os.startfile(target)  # type: ignore[attr-defined]
+    except OSError:
+        return False
+    return True
 
 
 def find_installed_path(exe: str) -> str:

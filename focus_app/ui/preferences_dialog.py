@@ -55,13 +55,6 @@ class PreferencesDialog(QDialog):
         form.addRow(_field_label("해제 문자열 길이"), self.code_len)
         form.addRow(_field_label(""), _hint("집중을 중간에 끝내려면 이 길이의 랜덤 문자열을 손으로 입력해야 합니다. 길수록 끄기 어렵습니다."))
 
-        self.emergency = QSpinBox()
-        self.emergency.setRange(1, 240)
-        self.emergency.setSuffix(" 분")
-        self.emergency.setValue(settings.emergency_delay_minutes)
-        form.addRow(_field_label("비상 해제 대기 시간"), self.emergency)
-        form.addRow(_field_label(""), _hint("문자열 입력 없이 끝내는 비상 수단입니다. 요청한 뒤 이 시간이 지나야 차단이 풀립니다."))
-
         self.quit_check = QCheckBox("집중 중에 FocusApp을 종료할 때도 문자열 입력 요구")
         self.quit_check.setChecked(settings.require_unlock_for_quit)
         layout.addLayout(form)
@@ -167,7 +160,6 @@ class PreferencesDialog(QDialog):
     def _save(self) -> None:
         s = self.settings
         s.unlock_code_length = int(self.code_len.value())
-        s.emergency_delay_minutes = int(self.emergency.value())
         s.require_unlock_for_quit = self.quit_check.isChecked()
         s.show_block_notifications = self.notify_check.isChecked()
         s.poll_interval_ms = int(self.poll.value())
