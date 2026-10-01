@@ -18,6 +18,13 @@ from PySide6.QtWidgets import (
 from focus_app.config import Settings
 
 
+def _field_label(text: str) -> QLabel:
+    """설정 항목 이름. 구역이 달라도 입력칸이 같은 위치에서 시작하도록 너비를 맞춤."""
+    label = QLabel(text)
+    label.setMinimumWidth(140)
+    return label
+
+
 def _hint(text: str) -> QLabel:
     label = QLabel(text)
     label.setObjectName("hint")
@@ -45,15 +52,15 @@ class PreferencesDialog(QDialog):
         self.code_len.setRange(8, 128)
         self.code_len.setSuffix(" 글자")
         self.code_len.setValue(settings.unlock_code_length)
-        form.addRow("해제 문자열 길이", self.code_len)
-        form.addRow("", _hint("집중을 중간에 끝내려면 이 길이의 랜덤 문자열을 손으로 입력해야 합니다. 길수록 끄기 어렵습니다."))
+        form.addRow(_field_label("해제 문자열 길이"), self.code_len)
+        form.addRow(_field_label(""), _hint("집중을 중간에 끝내려면 이 길이의 랜덤 문자열을 손으로 입력해야 합니다. 길수록 끄기 어렵습니다."))
 
         self.emergency = QSpinBox()
         self.emergency.setRange(1, 240)
         self.emergency.setSuffix(" 분")
         self.emergency.setValue(settings.emergency_delay_minutes)
-        form.addRow("비상 해제 대기 시간", self.emergency)
-        form.addRow("", _hint("문자열 입력 없이 끝내는 비상 수단입니다. 요청한 뒤 이 시간이 지나야 차단이 풀립니다."))
+        form.addRow(_field_label("비상 해제 대기 시간"), self.emergency)
+        form.addRow(_field_label(""), _hint("문자열 입력 없이 끝내는 비상 수단입니다. 요청한 뒤 이 시간이 지나야 차단이 풀립니다."))
 
         self.quit_check = QCheckBox("집중 중에 FocusApp을 종료할 때도 문자열 입력 요구")
         self.quit_check.setChecked(settings.require_unlock_for_quit)
@@ -74,8 +81,8 @@ class PreferencesDialog(QDialog):
         self.poll.setSingleStep(50)
         self.poll.setSuffix(" ms")
         self.poll.setValue(settings.poll_interval_ms)
-        form2.addRow("확인 주기", self.poll)
-        form2.addRow("", _hint("앞에 나온 창을 얼마나 자주 확인할지 정합니다. 보통은 바꿀 필요가 없습니다."))
+        form2.addRow(_field_label("확인 주기"), self.poll)
+        form2.addRow(_field_label(""), _hint("앞에 나온 창을 얼마나 자주 확인할지 정합니다. 보통은 바꿀 필요가 없습니다."))
         layout.addLayout(form2)
 
         title_h = QLabel("관리자 권한 앱 차단")
@@ -106,8 +113,8 @@ class PreferencesDialog(QDialog):
         self.token_edit = QLineEdit(settings.github_token)
         self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.token_edit.setPlaceholderText("비워 두면 사용하지 않음")
-        form3.addRow("GitHub 토큰", self.token_edit)
-        form3.addRow("", _hint("저장소가 비공개일 때만 필요합니다. 'Contents: 읽기' 권한만 있는 토큰을 쓰세요."))
+        form3.addRow(_field_label("GitHub 토큰"), self.token_edit)
+        form3.addRow(_field_label(""), _hint("저장소가 비공개일 때만 필요합니다. 'Contents: 읽기' 권한만 있는 토큰을 쓰세요."))
         layout.addLayout(form3)
         layout.addStretch(1)
 

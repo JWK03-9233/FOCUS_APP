@@ -79,7 +79,7 @@ class UnlockDialog(QDialog):
             f"<b>{purpose}</b> — 정말 하려면 아래 문자열을 <u>직접 손으로</u> 입력하세요.<br>"
             "붙여넣기는 되지 않고, 틀리면 새 문자열이 나옵니다. 띄어쓰기는 입력하지 않아도 됩니다."
         )
-        intro.setWordWrap(True)
+        intro.setWordWrap(False)  # 줄은 <br>로 나눔. 자동 줄바꿈은 창 높이를 쓸데없이 키움
         layout.addWidget(intro)
 
         self.code_label = QLabel()
@@ -91,7 +91,8 @@ class UnlockDialog(QDialog):
         font.setPointSize(16)
         self.code_label.setFont(font)
         self.code_label.setStyleSheet(
-            "QLabel { background: #1e1f22; color: #e8e8e8; padding: 14px; border-radius: 6px; }"
+            "QLabel { background: rgba(127, 127, 127, 0.14); border: 1px solid rgba(127, 127, 127, 0.32);"
+            " padding: 16px; border-radius: 14px; letter-spacing: 1px; }"
         )
         layout.addWidget(self.code_label)
 
@@ -119,6 +120,7 @@ class UnlockDialog(QDialog):
         layout.addWidget(buttons)
 
         self._refresh()
+        self.adjustSize()  # 줄바꿈 문장 때문에 생기는 빈 공간 없이 내용에 맞춤
 
     def _update_counter(self, *_args) -> None:
         typed = len("".join(self.input.text().split()))
