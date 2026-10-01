@@ -10,22 +10,25 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon
 
-from focus_app.config import Settings
+from focus_app import updater
+from focus_app.config import Settings, data_dir
 from focus_app.enforcer import ForegroundWindow
 from focus_app.monitor import AllowlistMonitor
 from focus_app.session import FocusSession, format_duration
 from focus_app.ui import app_catalog, icons
 from focus_app.ui.main_window import MainWindow
+from focus_app.ui.allowed_apps_dialog import AllowedAppsDialog
 from focus_app.ui.preferences_dialog import PreferencesDialog
 from focus_app.ui.theme import STYLESHEET
 from focus_app.ui.unlock_dialog import confirm_with_code
+from focus_app.ui.update_dialog import UpdateDialog, _Bridge, _safe_emit, run_in_thread
 from focus_app.version import APP_NAME, __version__
 
 log = logging.getLogger(__name__)
 
 
 class FocusApp:
-    def __init__(self, app: QApplication, show_window: bool = True) -> None:
+    def __init__(self, app: QApplication, show_window: bool = True, check_updates: bool = False) -> None:
         self.app = app
         app.setStyleSheet(STYLESHEET)
         self.settings = Settings.load()
@@ -45,6 +48,8 @@ class FocusApp:
         self.window.settings_changed.connect(self._safe_save_settings)
         self.window.preferences_requested.connect(self.open_preferences)
         self.window.quit_requested.connect(self.quit)
+        self.window.update_requested.connect(self.open_update)
+        self.window.edit_apps_requested.connect(self.edit_apps_during_focus)
         self.window.on_hidden_to_tray = self._on_window_hidden
 
         # --- 트레이
@@ -64,10 +69,16 @@ class FocusApp:
         self.status_timer.timeout.connect(self._refresh_status)
         self.status_timer.start()
 
+        self._update_bridge = _Bridge(app)
+        self._update_bridge.checked.connect(self._on_update_checked)
+        self._latest: Optional[updater.ReleaseInfo] = None
+
         self._resume_saved_session()
         self._refresh_status()
         if show_window:
             self.show_window()
+        if check_updates and self.settings.check_updates_on_start:
+            QTimer.singleShot(3000, self._check_updates_in_background)
 
     # ------------------------------------------------------------- 창
     def show_window(self) -> None:
@@ -239,6 +250,93 @@ class FocusApp:
                 2000,
             )
 
+    # ------------------------------------------------------ 집중 중 앱 편집
+    def edit_apps_during_focus(self) -> None:
+        """해제 문자열을 입력하면 집중을 끝내지 않고 지금 모드의 허용 앱만 고칩니다."""
+        if not self.active or self._dialog_open:
+            return
+        if not self._confirm("허용 앱 편집"):
+            return
+        session = self.session
+        profile = self.settings.get_profile(session.profile) if session else None
+        if session is None or profile is None:
+            return  # 입력하는 사이 집중이 끝났음
+        self._dialog_open = True
+        try:
+            dlg = AllowedAppsDialog(self.settings, profile, parent=self._dialog_parent())
+            try:
+                if dlg.exec() != QDialog.DialogCode.Accepted:
+                    return
+                if self.session is not session:
+                    return  # 편집하는 사이 집중이 끝났음 (저장할 모드도 모니터도 없음)
+                profile = dlg.apply_to(self.settings)
+            finally:
+                dlg.deleteLater()
+        finally:
+            self._dialog_open = False
+        self._safe_save_settings()
+        if self.monitor is not None:
+            self.monitor.set_profile(copy.deepcopy(profile))
+        self.window.show_running(session, profile)
+        self._refresh_status()
+        log.info("집중 중 허용 앱 변경: %s -> %s", profile.name, profile.normalized_apps())
+
+    # ------------------------------------------------------------- 업데이트
+    def _check_updates_in_background(self) -> None:
+        token, bridge = self.settings.github_token, self._update_bridge
+
+        def work() -> None:
+            try:
+                _safe_emit(bridge.checked, updater.fetch_latest(token))
+            except Exception as exc:  # noqa: BLE001 - 자동 확인 실패는 조용히 기록만
+                log.info("자동 업데이트 확인 실패: %s", exc)
+
+        run_in_thread(work, "update-check-startup")
+
+    def _on_update_checked(self, info: updater.ReleaseInfo) -> None:
+        self._latest = info
+        if info.newer:
+            self.window.set_update_available(info.version)
+            if not self.window.isVisible():
+                self.tray.showMessage(
+                    APP_NAME,
+                    f"새 버전 v{info.version}이(가) 있습니다. FocusApp 창에서 업데이트할 수 있습니다.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    5000,
+                )
+
+    def open_update(self) -> None:
+        if self._dialog_open:
+            return
+        if self.active:
+            QMessageBox.information(self._dialog_parent(), "업데이트", "집중이 끝난 뒤에 업데이트할 수 있습니다.")
+            return
+        self._dialog_open = True
+        try:
+            dlg = UpdateDialog(self.settings.github_token, parent=self._dialog_parent())
+            dlg.install_requested.connect(self._install_update)
+            try:
+                dlg.exec()
+                if dlg.info is not None:
+                    self._on_update_checked(dlg.info)
+                    if not dlg.info.newer:
+                        self.window.set_update_available(None)
+            finally:
+                dlg.deleteLater()
+        finally:
+            self._dialog_open = False
+
+    def _install_update(self, new_dir, work_dir) -> None:
+        if self.active:
+            return
+        try:
+            updater.launch_installer(new_dir, work_dir, data_dir() / "update.log")
+        except (updater.UpdateError, OSError) as exc:
+            QMessageBox.warning(self._dialog_parent(), "업데이트", str(exc))
+            return
+        log.info("업데이트를 위해 종료합니다.")
+        self._shutdown()
+
     # ------------------------------------------------------------- 설정
     def open_preferences(self) -> None:
         if self.active or self._dialog_open:
@@ -309,12 +407,18 @@ class FocusApp:
             if not self._confirm("FocusApp 종료"):
                 return
         # 세션 파일은 남겨 두어, 재실행 시 남은 시간 동안 차단을 이어가게 함 (해제 후 종료는 파일이 이미 지워짐)
+        self._shutdown()
+
+    def _shutdown(self) -> None:
         self.tray.hide()
         self.window.allow_close = True
         self.window.close()  # closeEvent에서 창 위치·크기를 저장
         self.app.quit()
 
     # ------------------------------------------------------------- 공통
+    def _dialog_parent(self):
+        return self.window if self.window.isVisible() else None
+
     def _confirm(self, purpose: str) -> bool:
         if self._dialog_open:
             return False

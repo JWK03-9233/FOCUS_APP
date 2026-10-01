@@ -35,7 +35,7 @@ from focus_app.session import FocusSession, format_duration, format_minutes
 from focus_app.ui import app_catalog, icons
 from focus_app.ui.app_picker import AppPickerDialog
 from focus_app.ui.preset_dialog import PresetDialog
-from focus_app.version import APP_NAME
+from focus_app.version import APP_NAME, __version__
 
 CUSTOM_ID = 100000  # 분 값(최대 1440)과 겹치지 않는 id. -1은 Qt가 "자동 지정"으로 해석해 쓰면 안 됨
 UNLIMITED_ID = 0
@@ -128,6 +128,8 @@ class MainWindow(QMainWindow):
     settings_changed = Signal()
     preferences_requested = Signal()
     quit_requested = Signal()
+    update_requested = Signal()
+    edit_apps_requested = Signal()  # 집중 중 허용 앱 편집 (해제 문자열 필요)
 
     def __init__(self, settings: Settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -166,6 +168,10 @@ class MainWindow(QMainWindow):
         titles.addWidget(_label(APP_NAME, "appTitle"))
         titles.addWidget(_label("고른 앱만 쓰고, 나머지 앱은 앞에 나오면 자동으로 최소화합니다.", "muted"))
         header.addLayout(titles, 1)
+        self.update_btn = QPushButton("업데이트 확인")
+        self.update_btn.setToolTip(f"현재 버전 v{__version__}")
+        self.update_btn.clicked.connect(self.update_requested.emit)
+        header.addWidget(self.update_btn, 0, Qt.AlignmentFlag.AlignTop)
         self.prefs_btn = QPushButton("⚙  설정")
         self.prefs_btn.clicked.connect(self.preferences_requested.emit)
         header.addWidget(self.prefs_btn, 0, Qt.AlignmentFlag.AlignTop)
@@ -600,6 +606,17 @@ class MainWindow(QMainWindow):
         finally:
             box.deleteLater()
 
+    def set_update_available(self, version: Optional[str]) -> None:
+        """새 버전이 있으면 머리글 버튼을 눈에 띄게 바꿉니다."""
+        if version:
+            self.update_btn.setText(f"⬆  새 버전 v{version}")
+            self.update_btn.setObjectName("secondary")
+        else:
+            self.update_btn.setText("업데이트 확인")
+            self.update_btn.setObjectName("")
+        self.update_btn.style().unpolish(self.update_btn)
+        self.update_btn.style().polish(self.update_btn)
+
     def show_notice(self, text: str) -> None:
         self.notice_label.setText(text)
         self.notice.show()
@@ -671,6 +688,11 @@ class MainWindow(QMainWindow):
         root.addSpacing(10)
         self.end_hint = _label("", "hint", wrap=True)
         buttons.addWidget(self.end_hint, 1)
+        self.edit_apps_btn = QPushButton("허용 앱 편집…")
+        self.edit_apps_btn.setObjectName("linkButton")
+        self.edit_apps_btn.setToolTip("해제 문자열을 입력하면 집중을 끝내지 않고 허용 앱 목록만 고칠 수 있습니다")
+        self.edit_apps_btn.clicked.connect(self.edit_apps_requested.emit)
+        buttons.addWidget(self.edit_apps_btn)
         self.emergency_btn = QPushButton("비상 해제…")
         self.emergency_btn.setObjectName("linkButton")
         self.emergency_btn.setToolTip("문자열을 입력하지 않고 끝내는 비상 수단 (일정 시간 뒤 적용)")
@@ -706,6 +728,7 @@ class MainWindow(QMainWindow):
                 self.run_apps.addItem("(없음 — 시스템 요소만 쓸 수 있습니다)")
         else:
             self.run_apps_title.setText("이 모드는 앱을 막지 않습니다")
+        self.edit_apps_btn.setVisible(profile.block_everything)
         self.end_hint.setText(
             f"끝내려면 {self.settings.unlock_code_length}글자 랜덤 문자열을 직접 입력해야 합니다."
         )

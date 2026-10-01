@@ -98,7 +98,7 @@ def main() -> int:
     if not sys.platform.startswith("win"):
         logging.getLogger(__name__).warning("Windows가 아닌 환경입니다. 창 감시/최소화는 동작하지 않습니다.")
 
-    controller = FocusApp(app)
+    controller = FocusApp(app, check_updates=True)
     app.aboutToQuit.connect(lambda: lock.unlock())
     _keep = controller  # noqa: F841 - GC 방지
     return app.exec()

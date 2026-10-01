@@ -156,6 +156,8 @@ class Settings:
     duration_presets: List[int] = field(default_factory=lambda: list(DEFAULT_DURATION_PRESETS))
     custom_duration_minutes: int = 45  # "직접 입력" 칸에 마지막으로 넣은 값
     window_geometry: str = ""  # 메인 창 위치·크기 (Qt saveGeometry의 base64)
+    check_updates_on_start: bool = True  # 실행할 때 새 버전이 있는지 확인
+    github_token: str = ""  # 비공개 저장소에서 업데이트를 받을 때만 필요 (읽기 권한 토큰)
     require_unlock_for_quit: bool = True
     require_unlock_for_profile_switch: bool = True
     emergency_delay_minutes: int = 10  # 비상 해제가 실제로 적용되기까지의 지연

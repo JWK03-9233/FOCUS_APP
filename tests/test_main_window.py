@@ -306,3 +306,87 @@ def test_unhandled_exceptions_are_logged(caplog):
         assert "슬롯 오류" in text and "worker" in text and "ZeroDivisionError" in text
     finally:
         sys.excepthook, threading.excepthook = old_sys, old_thread
+
+
+def test_edit_apps_during_focus_requires_code_and_keeps_session(qapp, monkeypatch):
+    from focus_app.ui import allowed_apps_dialog
+
+    ctl = _controller(qapp)
+    try:
+        name = ctl.settings.active_profile
+        ctl.start_focus(name, 30)
+        session = ctl.session
+
+        monkeypatch.setattr(ctl, "_confirm", lambda purpose: False)  # 문자열을 틀리거나 취소
+        ctl.edit_apps_during_focus()
+        assert "obsidian.exe" not in ctl.settings.get_profile(name).normalized_apps()
+
+        def fake_exec(self):
+            self.add_entries([AppEntry("obsidian.exe", "Obsidian", "")])
+            self.remove_app("notepad.exe")
+            return 1  # Accepted
+
+        monkeypatch.setattr(ctl, "_confirm", lambda purpose: True)
+        monkeypatch.setattr(allowed_apps_dialog.AllowedAppsDialog, "exec", fake_exec)
+        ctl.edit_apps_during_focus()
+
+        apps = ctl.settings.get_profile(name).normalized_apps()
+        assert "obsidian.exe" in apps and "notepad.exe" not in apps
+        assert ctl.monitor.profile.allows("obsidian.exe")  # 감시에 즉시 반영
+        assert not ctl.monitor.profile.allows("notepad.exe")
+        assert ctl.session is session and ctl.active  # 집중은 그대로
+        assert "obsidian.exe" in Settings.load().get_profile(name).normalized_apps()  # 저장됨
+    finally:
+        ctl._end_session("manual")
+        _close(ctl)
+
+
+def test_allowed_apps_dialog_cancel_changes_nothing(qapp):
+    from focus_app.ui.allowed_apps_dialog import AllowedAppsDialog
+
+    s = Settings()
+    p = s.current_profile()
+    before = p.normalized_apps()
+    dlg = AllowedAppsDialog(s, p)
+    dlg.remove_app(before[0])
+    dlg.add_entries([AppEntry("x.exe", "X", "")])
+    dlg.reject()
+    assert p.normalized_apps() == before  # 저장 전까지 원본은 그대로
+
+
+def test_update_dialog_states(qapp):
+    from focus_app.updater import ReleaseInfo
+    from focus_app.ui.update_dialog import UpdateDialog
+
+    newer = ReleaseInfo("99.0.0", "v99.0.0", "- 좋아짐", "https://x", "a-win64.zip", "u", 1, "")
+    dlg = UpdateDialog(info=newer)
+    assert "99.0.0" in dlg.title.text() and not dlg.notes.isHidden()
+    assert dlg.install_btn.isHidden()  # 테스트는 소스 실행이라 자동 설치 버튼 대신 안내
+    assert "소스 코드" in dlg.status.text()
+
+    same = ReleaseInfo("0.0.1", "v0.0.1", "", "https://x")
+    dlg2 = UpdateDialog(info=same)
+    assert "최신" in dlg2.title.text()
+
+
+def test_update_dialog_background_check_reports_errors(qapp):
+    from focus_app.updater import UpdateError
+    from focus_app.ui.update_dialog import UpdateDialog
+
+    def fail(token):
+        raise UpdateError("연결 안 됨")
+
+    dlg = UpdateDialog(fetch=fail)
+    deadline = time.time() + 5
+    while "연결 안 됨" not in dlg.status.text() and time.time() < deadline:
+        qapp.processEvents()
+    assert "연결 안 됨" in dlg.status.text()
+    assert not dlg.retry_btn.isHidden()
+
+
+def test_update_button_highlights_new_version(qapp):
+    s, w = make_window(qapp)
+    w.set_update_available("9.9.9")
+    assert "9.9.9" in w.update_btn.text()
+    w.set_update_available(None)
+    assert w.update_btn.text() == "업데이트 확인"

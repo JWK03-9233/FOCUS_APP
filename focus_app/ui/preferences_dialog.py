@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -76,6 +77,21 @@ class PreferencesDialog(QDialog):
         form2.addRow("확인 주기", self.poll)
         form2.addRow("", _hint("앞에 나온 창을 얼마나 자주 확인할지 정합니다. 보통은 바꿀 필요가 없습니다."))
         layout.addLayout(form2)
+
+        title3 = QLabel("업데이트")
+        title3.setObjectName("sectionTitle")
+        layout.addWidget(title3)
+        self.update_check = QCheckBox("실행할 때 새 버전이 있는지 확인")
+        self.update_check.setChecked(settings.check_updates_on_start)
+        layout.addWidget(self.update_check)
+        form3 = QFormLayout()
+        form3.setVerticalSpacing(4)
+        self.token_edit = QLineEdit(settings.github_token)
+        self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.token_edit.setPlaceholderText("비워 두면 사용하지 않음")
+        form3.addRow("GitHub 토큰", self.token_edit)
+        form3.addRow("", _hint("저장소가 비공개일 때만 필요합니다. 'Contents: 읽기' 권한만 있는 토큰을 쓰세요."))
+        layout.addLayout(form3)
         layout.addStretch(1)
 
         buttons = QHBoxLayout()
@@ -96,4 +112,6 @@ class PreferencesDialog(QDialog):
         s.require_unlock_for_quit = self.quit_check.isChecked()
         s.show_block_notifications = self.notify_check.isChecked()
         s.poll_interval_ms = int(self.poll.value())
+        s.check_updates_on_start = self.update_check.isChecked()
+        s.github_token = self.token_edit.text().strip()
         self.accept()
