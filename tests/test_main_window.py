@@ -811,3 +811,13 @@ def test_modes_can_be_reordered_by_drag(qapp):
     s2.profiles = list(s.profiles)
     s2.reorder_profiles(names)
     assert [p.name for p in s2.profiles] == names
+
+
+def test_unlimited_session_hides_timer(qapp):
+    s, w = make_window(qapp)
+    p = s.current_profile()
+    w.show_running(FocusSession.start(p.name, None), p)
+    assert w.timer_label.isHidden() and w.timer_caption.isHidden() and w.progress.isHidden()
+    assert "직접 끝낼 때까지" in w.run_info.text()
+    w.show_running(FocusSession.start(p.name, 30), p)  # 시간을 정한 집중이면 다시 보임
+    assert not w.timer_label.isHidden() and not w.progress.isHidden()

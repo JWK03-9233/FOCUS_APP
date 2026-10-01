@@ -792,11 +792,14 @@ class MainWindow(QMainWindow):
         now = time.time()
         remaining = session.remaining_seconds(now)
         if remaining is None:
-            self.timer_caption.setText("지금까지 집중한 시간")
-            self.timer_label.setText(format_clock(session.elapsed_seconds(now)))
+            # '끝낼 때까지'는 시간을 보여 주지 않음
+            self.timer_caption.hide()
+            self.timer_label.hide()
             self.progress.hide()
             info = "직접 끝낼 때까지 계속됩니다"
         else:
+            self.timer_caption.show()
+            self.timer_label.show()
             self.timer_caption.setText("남은 시간")
             self.timer_label.setText(format_clock(remaining))
             total = max(1.0, (session.ends_at or now) - session.started_at)
