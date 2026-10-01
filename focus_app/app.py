@@ -19,6 +19,7 @@ from focus_app.session import FocusSession, format_duration
 from focus_app.ui import app_catalog, icons
 from focus_app.ui.main_window import MainWindow
 from focus_app.ui.allowed_apps_dialog import AllowedAppsDialog
+from focus_app.ui.end_dialog import FocusEndDialog
 from focus_app.ui.preferences_dialog import PreferencesDialog
 from focus_app.ui.theme import STYLESHEET
 from focus_app.ui.unlock_dialog import confirm_with_code
@@ -73,6 +74,7 @@ class FocusApp:
         self._helper_ok = False  # 관리자 권한 도우미가 지금 감시 중인지 (2초마다 갱신)
         self._helper_checked = 0.0
         self._warned_elevated = False
+        self._end_popup: Optional[FocusEndDialog] = None
 
         self._update_bridge = _Bridge(app)
         self._update_bridge.checked.connect(self._on_update_checked)
@@ -234,7 +236,10 @@ class FocusApp:
         FocusSession.clear()
         self._refresh_status()
 
-        minutes = session.elapsed_seconds() // 60 if session else 0
+        focused = session.elapsed_seconds()
+        if session.ends_at is not None:  # 앱이 꺼져 있다 다시 켜진 경우 정한 시간보다 길게 세지 않음
+            focused = min(focused, int(session.ends_at - session.started_at))
+        minutes = focused // 60
         blocked = monitor.block_count if monitor else 0
         summary = f"{minutes}분 동안 집중했어요." + (f" 다른 앱을 {blocked}번 막았어요." if blocked else "")
         msg = {
@@ -245,8 +250,29 @@ class FocusApp:
         self.window.show_setup()
         self.window.show_notice(f"<b>{msg}</b>  {summary}")
         if reason != "manual":
+            # 직접 끝낸 게 아니면 놓치지 않게: 창을 앞으로 가져오고, 닫을 때까지 떠 있는 알림 창을 띄움.
+            # 집중 중에 최소화된 앱들은 그대로 둠 (한꺼번에 다시 열지 않음)
             self.show_window()
+            self._show_end_popup(reason, session.profile, focused, blocked)
         self.tray.showMessage(APP_NAME, f"{msg} {summary}", QSystemTrayIcon.MessageIcon.Information, 5000)
+
+    def _show_end_popup(self, reason: str, mode_name: str, focused: int, blocked: int) -> None:
+        if self._end_popup is not None:
+            self._end_popup.close()
+        popup = FocusEndDialog(reason, mode_name, focused, blocked, parent=self.window)
+        popup.destroyed.connect(lambda *_: setattr(self, "_end_popup", None))
+        self._end_popup = popup
+        popup.show()
+        # 다른 앱을 쓰고 있어도 앞으로 오도록 (Windows는 배경 앱이 포커스를 가져가는 것을 막으므로 우회)
+        QTimer.singleShot(100, self._bring_end_popup_to_front)
+
+    def _bring_end_popup_to_front(self) -> None:
+        for widget in (self.window, self._end_popup):
+            if widget is not None and widget.isVisible():
+                try:
+                    winapi.bring_to_front(int(widget.winId()))
+                except Exception:  # noqa: BLE001 - 앞으로 못 가져와도 창은 떠 있음
+                    log.exception("집중 끝 알림 창을 앞으로 가져오지 못함")
 
     def _poll(self) -> None:
         if self.monitor is None or self.session is None:

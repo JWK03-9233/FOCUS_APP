@@ -614,3 +614,65 @@ def test_best_exe_in_install_folder_and_store_logo(tmp_path):
     for n in ("Logo.scale-100.png", "Logo.targetsize-48.png", "Logo.targetsize-48_contrast-black.png"):
         (assets / n).write_bytes(b"png")
     assert Path(cat._store_logo(str(tmp_path / "pkg"), "Assets\Logo.png")).name == "Logo.targetsize-48.png"
+
+
+def test_end_popup_on_expiry_brings_only_focusapp_to_front(qapp, monkeypatch):
+    from focus_app import winapi
+    from focus_app.ui.end_dialog import FocusEndDialog
+
+    fronted = []
+    monkeypatch.setattr(winapi, "bring_to_front", lambda hwnd: fronted.append(hwnd) or True)
+    ctl = _controller(qapp)
+    try:
+        ctl.start_focus(ctl.settings.active_profile, 30)
+        ctl.monitor.block_count = 3
+        ctl.session.started_at -= 30 * 60  # 30분 지난 것으로
+        ctl.session.ends_at = time.time() - 1
+        QTest_wait(qapp, 300)  # 앞선 테스트가 예약해 둔 동작이 끝나기를 기다린 뒤 기록 시작
+        fronted.clear()
+        ctl._refresh_status()  # 타이머가 끝난 것을 감지
+
+        popup = ctl._end_popup
+        assert isinstance(popup, FocusEndDialog) and popup.isVisible()
+        assert "끝났어요" in popup.title.text()
+        assert "30분" in popup.summary.text() and "3번" in popup.summary.text()
+        assert popup.windowFlags() & Qt.WindowType.WindowStaysOnTopHint  # 닫을 때까지 위에 떠 있음
+        assert ctl.window.isVisible()
+        qapp.processEvents()
+        QTest_wait(qapp, 250)
+        # 앞으로 가져오는 것은 FocusApp 창과 알림 창뿐 (최소화된 다른 앱은 건드리지 않음)
+        assert set(fronted) <= {int(ctl.window.winId()), int(popup.winId())} and fronted
+        popup.ok_btn.click()  # 닫으면 스스로 정리됨
+        from PySide6.QtCore import QCoreApplication, QEvent
+
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        qapp.processEvents()
+        assert ctl._end_popup is None
+        ctl._bring_end_popup_to_front()  # 닫힌 뒤에 불려도 오류 없음
+    finally:
+        _close(ctl)
+
+
+def test_no_end_popup_when_user_ends_focus(qapp, monkeypatch):
+    ctl = _controller(qapp)
+    try:
+        ctl.start_focus(ctl.settings.active_profile, 30)
+        monkeypatch.setattr(ctl, "_confirm", lambda purpose: True)
+        ctl.stop_focus()
+        assert ctl._end_popup is None
+    finally:
+        _close(ctl)
+
+
+def test_end_popup_emergency_text(qapp):
+    from focus_app.ui.end_dialog import FocusEndDialog
+
+    dlg = FocusEndDialog("emergency", "공부용", 600, 0)
+    assert "비상 해제" in dlg.title.text()
+    assert "10분" in dlg.summary.text() and "새지 않았어요" in dlg.summary.text()
+
+
+def QTest_wait(qapp, ms):
+    from PySide6.QtTest import QTest
+
+    QTest.qWait(ms)
