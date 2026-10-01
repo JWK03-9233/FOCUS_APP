@@ -462,7 +462,13 @@ class MainWindow(QMainWindow):
         p = self.current_mode()
         if p is None or not p.block_everything:
             return
-        dlg = AppPickerDialog(p.name, p.normalized_apps(), parent=self)
+        dlg = AppPickerDialog(
+            p.name,
+            p.normalized_apps(),
+            parent=self,
+            hidden=self.settings.hidden_apps,
+            on_hidden_changed=self._save_hidden_apps,
+        )
         try:
             if dlg.exec() != AppPickerDialog.DialogCode.Accepted:
                 return
@@ -470,6 +476,10 @@ class MainWindow(QMainWindow):
         finally:
             dlg.deleteLater()  # 부모(메인 창)에 붙은 채 쌓이지 않도록 정리
         self.add_entries(p, entries)
+
+    def _save_hidden_apps(self, hidden: List[str]) -> None:
+        self.settings.hidden_apps = list(hidden)
+        self.settings_changed.emit()
 
     def add_entries(self, profile: Profile, entries: List[app_catalog.AppEntry]) -> None:
         for e in entries:

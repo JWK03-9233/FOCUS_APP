@@ -310,7 +310,9 @@ class FocusApp:
             return  # 입력하는 사이 집중이 끝났음
         self._dialog_open = True
         try:
-            dlg = AllowedAppsDialog(self.settings, profile, parent=self._dialog_parent())
+            dlg = AllowedAppsDialog(
+                self.settings, profile, parent=self._dialog_parent(), on_settings_changed=self._safe_save_settings
+            )
             try:
                 if dlg.exec() != QDialog.DialogCode.Accepted:
                     return

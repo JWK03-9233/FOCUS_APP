@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 
 from PySide6.QtCore import QSize
 from PySide6.QtWidgets import (
@@ -27,9 +27,16 @@ from focus_app.ui.main_window import AppRow
 
 
 class AllowedAppsDialog(QDialog):
-    def __init__(self, settings: Settings, profile: Profile, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        profile: Profile,
+        parent: QWidget | None = None,
+        on_settings_changed: Optional[Callable[[], None]] = None,
+    ) -> None:
         super().__init__(parent)
         self.settings = settings
+        self._on_settings_changed = on_settings_changed
         self.profile_name = profile.name
         self._apps: List[str] = profile.normalized_apps()  # 저장 전까지는 복사본만 고침
         self._new_entries: Dict[str, AppEntry] = {}
@@ -92,7 +99,13 @@ class AllowedAppsDialog(QDialog):
             self.list.setItemWidget(item, row)
 
     def _add(self) -> None:
-        dlg = AppPickerDialog(self.profile_name, self._apps, parent=self)
+        dlg = AppPickerDialog(
+            self.profile_name,
+            self._apps,
+            parent=self,
+            hidden=self.settings.hidden_apps,
+            on_hidden_changed=self._save_hidden_apps,
+        )
         try:
             if dlg.exec() != AppPickerDialog.DialogCode.Accepted:
                 return
@@ -100,6 +113,12 @@ class AllowedAppsDialog(QDialog):
         finally:
             dlg.deleteLater()
         self.add_entries(entries)
+
+    def _save_hidden_apps(self, hidden: List[str]) -> None:
+        # 숨긴 앱 목록은 허용 앱 편집을 취소해도 유지 (차단과 무관한 표시 설정)
+        self.settings.hidden_apps = list(hidden)
+        if self._on_settings_changed is not None:
+            self._on_settings_changed()
 
     def add_entries(self, entries: List[AppEntry]) -> None:
         for e in entries:

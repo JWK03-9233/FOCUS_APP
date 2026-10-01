@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 ACCENT = "#2e9e5b"  # 집중 시작 / 진행 중 강조색
 ACCENT_HOVER = "#36b268"
 WARN = "#d9822b"
 DANGER = "#c0392b"
+
+# QSS의 url()은 슬래시 경로를 씀. exe 배포본에서도 focus_app/assets가 함께 들어감
+_ASSETS = (Path(__file__).resolve().parent.parent / "assets").as_posix()
 
 STYLESHEET = f"""
 QWidget {{ font-size: 10pt; }}
@@ -46,6 +51,23 @@ QListWidget#pickList {{
     padding: 4px;
 }}
 QListWidget#pickList::item {{ border-radius: 6px; padding: 2px 4px; }}
+/* 체크박스를 직접 그림: 목록이 포커스를 갖지 않아도 체크 상태가 분명히 보이도록 */
+QListWidget#pickList::indicator {{
+    width: 18px;
+    height: 18px;
+    border: 1px solid #8a8f98;
+    border-radius: 5px;
+    background: transparent;
+}}
+QListWidget#pickList::indicator:checked {{
+    background: {ACCENT};
+    border-color: {ACCENT};
+    image: url({_ASSETS}/check.png);
+}}
+QListWidget#pickList::indicator:checked:disabled {{
+    background: #5b7a66;
+    border-color: #5b7a66;
+}}
 QListWidget#pickList::item:hover {{ background: palette(alternate-base); }}
 
 QListWidget#appList {{

@@ -166,6 +166,7 @@ class Settings:
     window_geometry: str = ""  # 메인 창 위치·크기 (Qt saveGeometry의 base64)
     check_updates_on_start: bool = True  # 실행할 때 새 버전이 있는지 확인
     github_token: str = ""  # 비공개 저장소에서 업데이트를 받을 때만 필요 (읽기 권한 토큰)
+    hidden_apps: List[str] = field(default_factory=list)  # 앱 고르기 창에서 숨긴 앱 (실행 파일 이름)
     require_unlock_for_quit: bool = True
     require_unlock_for_profile_switch: bool = True
     emergency_delay_minutes: int = 10  # 비상 해제가 실제로 적용되기까지의 지연
@@ -281,7 +282,7 @@ class Settings:
                 if isinstance(info, dict):
                     settings.remember_app(str(exe), str(info.get("name", "")), str(info.get("path", "")))
         for f in fields(cls):
-            if f.name in ("profiles", "app_info", "duration_presets") or f.name not in raw:
+            if f.name in ("profiles", "app_info", "duration_presets", "hidden_apps") or f.name not in raw:
                 continue
             value = raw[f.name]
             current = getattr(settings, f.name)
@@ -301,6 +302,9 @@ class Settings:
         settings.default_duration_minutes = max(0, min(1440, settings.default_duration_minutes))
         settings.custom_duration_minutes = max(1, min(1440, settings.custom_duration_minutes))
         settings.duration_presets = clean_presets(raw.get("duration_presets", DEFAULT_DURATION_PRESETS))
+        hidden_raw = raw.get("hidden_apps")
+        if isinstance(hidden_raw, list):
+            settings.hidden_apps = list(dict.fromkeys(normalize_exe(str(h)) for h in hidden_raw if normalize_exe(str(h))))
         if settings.get_profile(settings.active_profile) is None:
             settings.active_profile = settings.profiles[0].name
         return settings
