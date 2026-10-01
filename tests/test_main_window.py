@@ -437,11 +437,11 @@ def test_installed_app_filters(tmp_path):
     assert not cat.is_gui_exe(str(tmp_path / "Real.exe"))  # PE가 아님
 
 
-def _rows(dlg):
+def _keys(dlg):
     out = []
     for i in range(dlg.list.count()):
         it = dlg.list.item(i)
-        out.append((it.data(Qt.ItemDataRole.UserRole + 1) or it.data(Qt.ItemDataRole.UserRole), it.isHidden()))
+        out.append(it.data(Qt.ItemDataRole.UserRole + 1) or it.data(Qt.ItemDataRole.UserRole))
     return out
 
 
@@ -449,63 +449,69 @@ def _item(dlg, exe):
     return next(dlg.list.item(i) for i in range(dlg.list.count()) if dlg.list.item(i).data(Qt.ItemDataRole.UserRole) == exe)
 
 
-def test_hide_apps_moves_them_to_bottom_and_remembers(qapp):
+def _click_star(dlg, exe):
+    from PySide6.QtTest import QTest
+
+    from focus_app.ui.app_picker import star_rect
+
+    item = _item(dlg, exe)
+    dlg.list.scrollToItem(item)
+    pos = star_rect(dlg.list.visualItemRect(item)).center()
+    QTest.mouseClick(dlg.list.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+
+
+def test_star_click_moves_app_to_favorites_and_keeps_check(qapp):
     saved = []
     running = [AppEntry("chrome.exe", "Chrome", "", True), AppEntry("code.exe", "VS Code", "", True)]
-    dlg = AppPickerDialog("공부용", [], running=running, on_hidden_changed=saved.append)
-    _item(dlg, "chrome.exe").setCheckState(Qt.CheckState.Checked)
-    _item(dlg, "hwp.exe").setCheckState(Qt.CheckState.Checked)  # 설치된 앱도 숨길 수 있음
-    assert dlg.hide_btn.isEnabled()
-    dlg.hide_checked()
+    dlg = AppPickerDialog("공부용", [], running=running, on_favorites_changed=saved.append)
+    dlg.show()
+    _item(dlg, "code.exe").setCheckState(Qt.CheckState.Checked)
+    _click_star(dlg, "hwp.exe")  # 설치된 앱의 별
+    _click_star(dlg, "code.exe")  # 실행 중인 앱의 별
 
-    assert saved[-1] == ["chrome.exe", "hwp.exe"]  # 바로 저장
-    rows = _rows(dlg)
-    keys = [k for k, _ in rows]
-    assert keys[-3:] == ["hidden", "chrome.exe", "hwp.exe"]  # 맨 아래 '숨긴 앱' 구역
-    assert dict(rows)["chrome.exe"] is True  # 기본은 접혀 있어 안 보임
-    assert _item(dlg, "chrome.exe").checkState() == Qt.CheckState.Unchecked  # 숨기면서 체크 해제
-    assert dlg.selected_exes() == []
+    assert saved[-1] == ["hwp.exe", "code.exe"]  # 바로 저장
+    keys = _keys(dlg)
+    assert keys[0] == "favorites" and set(keys[1:3]) == {"hwp.exe", "code.exe"}
+    assert keys.count("code.exe") == 1  # 원래 구역에서는 빠짐
+    assert _item(dlg, "code.exe").checkState() == Qt.CheckState.Checked  # 별을 눌러도 체크는 그대로
+    assert _item(dlg, "hwp.exe").checkState() == Qt.CheckState.Unchecked
+    assert dlg.selected_exes() == ["code.exe"]
 
-    # 다음에 열어도 숨김 유지
-    dlg2 = AppPickerDialog("공부용", [], running=running, hidden=saved[-1])
-    assert [k for k, _ in _rows(dlg2)][-3:] == ["hidden", "chrome.exe", "hwp.exe"]
-    assert "숨긴 앱 (2)" in _item_header(dlg2).text()
-
-
-def _item_header(dlg):
-    return next(dlg.list.item(i) for i in range(dlg.list.count()) if dlg.list.item(i).data(Qt.ItemDataRole.UserRole + 1) == "hidden")
+    # 다음에 열어도 맨 위
+    dlg2 = AppPickerDialog("공부용", [], running=running, favorites=saved[-1])
+    assert _keys(dlg2)[0] == "favorites" and set(_keys(dlg2)[1:3]) == {"code.exe", "hwp.exe"}
+    assert "즐겨찾기 (2)" in dlg2.list.item(0).text()
 
 
-def test_hidden_section_expand_search_and_unhide(qapp):
+def test_star_works_on_already_added_and_unknown_apps(qapp):
     saved = []
     running = [AppEntry("chrome.exe", "Chrome", "", True)]
-    dlg = AppPickerDialog("공부용", [], running=running, hidden=["chrome.exe"], on_hidden_changed=saved.append)
-    assert _item(dlg, "chrome.exe").isHidden()
-    dlg._on_item_clicked(_item_header(dlg))  # 머리글을 눌러 펼침
+    dlg = AppPickerDialog("공부용", ["chrome.exe"], running=running, favorites=["portable.exe"],
+                          on_favorites_changed=saved.append, app_names=lambda exe: "내 휴대용 앱")
+    dlg.show()
+    # 실행 중도 설치 목록에도 없는 즐겨찾기도 이름과 함께 보이고, 바로 체크해 추가할 수 있음
+    assert "내 휴대용 앱" in _item(dlg, "portable.exe").text()
+    _item(dlg, "portable.exe").setCheckState(Qt.CheckState.Checked)
+    assert dlg.selected_exes() == ["portable.exe"]
+    # 이미 추가된(비활성) 앱도 별로 즐겨찾기 가능
+    _click_star(dlg, "chrome.exe")
+    assert saved[-1] == ["portable.exe", "chrome.exe"]
+    assert _item(dlg, "chrome.exe").checkState() == Qt.CheckState.Checked
+    # 다시 누르면 해제
+    _click_star(dlg, "portable.exe")
+    assert saved[-1] == ["chrome.exe"]
+    assert "portable.exe" not in _keys(dlg)  # 어디에도 없는 앱은 즐겨찾기에서 빼면 목록에서 사라짐
+    dlg.search.setText("chrome")
     assert not _item(dlg, "chrome.exe").isHidden()
-    dlg._on_item_clicked(_item_header(dlg))  # 다시 접음
-    assert _item(dlg, "chrome.exe").isHidden()
-
-    dlg.search.setText("chrome")  # 검색하면 숨긴 앱에서도 찾아 줌
-    assert not _item(dlg, "chrome.exe").isHidden()
-    dlg.search.setText("")
-
-    _item(dlg, "chrome.exe").setCheckState(Qt.CheckState.Checked)
-    assert not dlg.unhide_btn.isHidden()
-    assert dlg.selected_exes() == ["chrome.exe"]  # 숨긴 앱도 체크하면 추가할 수 있음
-    dlg.unhide_checked()
-    assert saved[-1] == []
-    keys = [k for k, _ in _rows(dlg)]
-    assert "hidden" not in keys and keys.index("chrome.exe") < keys.index("installed")  # 원래 자리로
 
 
-def test_hidden_apps_saved_in_settings(qapp):
+def test_favorite_apps_saved_in_settings(qapp):
     s = Settings()
-    s.hidden_apps = ["Chrome.EXE", "chrome.exe", "", "C:/x/Game.exe"]
+    s.favorite_apps = ["Chrome.EXE", "chrome.exe", "", "C:/x/Game.exe"]
     s.save()
-    assert Settings.load().hidden_apps == ["chrome.exe", "game.exe"]
-    assert Settings.from_dict({"hidden_apps": "junk"}).hidden_apps == []
+    assert Settings.load().favorite_apps == ["chrome.exe", "game.exe"]
+    assert Settings.from_dict({"favorite_apps": "junk"}).favorite_apps == []
 
     s2, w = make_window(qapp)
-    w._save_hidden_apps(["zoom.exe"])
-    assert s2.hidden_apps == ["zoom.exe"]
+    w._save_favorite_apps(["zoom.exe"])
+    assert s2.favorite_apps == ["zoom.exe"]

@@ -103,8 +103,10 @@ class AllowedAppsDialog(QDialog):
             self.profile_name,
             self._apps,
             parent=self,
-            hidden=self.settings.hidden_apps,
-            on_hidden_changed=self._save_hidden_apps,
+            favorites=self.settings.favorite_apps,
+            on_favorites_changed=self._save_favorite_apps,
+            app_names=self.settings.app_display_name,
+            app_paths=self._path,
         )
         try:
             if dlg.exec() != AppPickerDialog.DialogCode.Accepted:
@@ -114,9 +116,9 @@ class AllowedAppsDialog(QDialog):
             dlg.deleteLater()
         self.add_entries(entries)
 
-    def _save_hidden_apps(self, hidden: List[str]) -> None:
-        # 숨긴 앱 목록은 허용 앱 편집을 취소해도 유지 (차단과 무관한 표시 설정)
-        self.settings.hidden_apps = list(hidden)
+    def _save_favorite_apps(self, favorites: List[str]) -> None:
+        # 즐겨찾기는 허용 앱 편집을 취소해도 유지 (차단과 무관한 표시 설정)
+        self.settings.favorite_apps = list(favorites)
         if self._on_settings_changed is not None:
             self._on_settings_changed()
 

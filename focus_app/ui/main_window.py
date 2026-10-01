@@ -466,8 +466,10 @@ class MainWindow(QMainWindow):
             p.name,
             p.normalized_apps(),
             parent=self,
-            hidden=self.settings.hidden_apps,
-            on_hidden_changed=self._save_hidden_apps,
+            favorites=self.settings.favorite_apps,
+            on_favorites_changed=self._save_favorite_apps,
+            app_names=self.settings.app_display_name,
+            app_paths=self._app_path,
         )
         try:
             if dlg.exec() != AppPickerDialog.DialogCode.Accepted:
@@ -477,8 +479,8 @@ class MainWindow(QMainWindow):
             dlg.deleteLater()  # 부모(메인 창)에 붙은 채 쌓이지 않도록 정리
         self.add_entries(p, entries)
 
-    def _save_hidden_apps(self, hidden: List[str]) -> None:
-        self.settings.hidden_apps = list(hidden)
+    def _save_favorite_apps(self, favorites: List[str]) -> None:
+        self.settings.favorite_apps = list(favorites)
         self.settings_changed.emit()
 
     def add_entries(self, profile: Profile, entries: List[app_catalog.AppEntry]) -> None:
