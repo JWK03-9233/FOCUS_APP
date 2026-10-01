@@ -211,6 +211,11 @@ class Settings:
         if self.active_profile == name:
             self.active_profile = self.profiles[0].name
 
+    def reorder_profiles(self, names: List[str]) -> None:
+        """모드 순서를 이 이름 순서대로 바꿉니다 (목록에 없는 모드는 뒤에 그대로)."""
+        order = {name: i for i, name in enumerate(names)}
+        self.profiles.sort(key=lambda p: order.get(p.name, len(order)))
+
     def rename_profile(self, old: str, new: str) -> None:
         new = new.strip()
         if not new:

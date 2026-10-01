@@ -8,9 +8,10 @@ from __future__ import annotations
 import time
 from typing import List, Optional
 
-from PySide6.QtCore import QByteArray, QEvent, QObject, QSize, Qt, Signal
+from PySide6.QtCore import QByteArray, QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QKeyEvent
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QButtonGroup,
     QFrame,
     QHBoxLayout,
@@ -231,6 +232,10 @@ class MainWindow(QMainWindow):
         self.mode_list = QListWidget()
         self.mode_list.setObjectName("modeList")
         self.mode_list.currentItemChanged.connect(self._on_mode_selected)
+        # 드래그해서 모드 순서 바꾸기. 옮긴 뒤 목록을 다시 그려 각 줄의 위젯이 제자리에 오게 함
+        self.mode_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.mode_list.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.mode_list.model().rowsMoved.connect(lambda *_: QTimer.singleShot(0, self._on_modes_reordered))
         ll.addWidget(self.mode_list, 1)
         self.add_mode_btn = QPushButton("+  새 모드 만들기")
         self.add_mode_btn.setObjectName("secondary")
@@ -363,6 +368,14 @@ class MainWindow(QMainWindow):
         self.mode_list.blockSignals(False)
         self.mode_list.setCurrentItem(target or self.mode_list.item(0))
         self._show_mode()
+
+    def _on_modes_reordered(self) -> None:
+        names = [self.mode_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.mode_list.count())]
+        if names == [p.name for p in self.settings.profiles]:
+            return
+        self.settings.reorder_profiles(names)
+        self.settings_changed.emit()
+        self.reload_modes()
 
     def _refresh_mode_item(self) -> None:
         item = self.mode_list.currentItem()

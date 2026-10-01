@@ -785,3 +785,29 @@ def test_tray_notifications_only_when_an_app_is_blocked(qapp, monkeypatch):
         if ctl._end_popup is not None:
             ctl._end_popup.close()
         _close(ctl)
+
+
+def test_modes_can_be_reordered_by_drag(qapp):
+    from PySide6.QtCore import QModelIndex
+
+    s, w = make_window(qapp)
+    saved = []
+    w.settings_changed.connect(lambda: saved.append(1))
+    names = [p.name for p in s.profiles]
+    selected = w.current_mode().name
+    assert w.mode_list.dragDropMode() == w.mode_list.DragDropMode.InternalMove
+    # 마지막 모드를 맨 위로 끌어 놓은 것과 같은 이동
+    assert w.mode_list.model().moveRow(QModelIndex(), len(names) - 1, QModelIndex(), 0)
+    qapp.processEvents()
+    expected = [names[-1]] + names[:-1]
+    assert [p.name for p in s.profiles] == expected and saved
+    assert [w.mode_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(w.mode_list.count())] == expected
+    assert all(w.mode_list.itemWidget(w.mode_list.item(i)) is not None for i in range(w.mode_list.count()))
+    assert w.current_mode().name == selected  # 고른 모드는 그대로
+    # 다시 불러와도 순서 유지
+    from focus_app.config import Settings as S
+
+    s2 = S()
+    s2.profiles = list(s.profiles)
+    s2.reorder_profiles(names)
+    assert [p.name for p in s2.profiles] == names
