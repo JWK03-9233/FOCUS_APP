@@ -307,6 +307,27 @@ try {{
 """
 
 
+def spawn_hidden_powershell(script: str) -> subprocess.Popen:
+    """창 없이 PowerShell 스크립트를 따로 실행합니다. 이 앱이 종료되어도 계속 실행됩니다.
+
+    주의: DETACHED_PROCESS를 쓰면 PowerShell이 콘솔이 없어 아무것도 하지 않고 바로 끝납니다
+    (v0.3.0~0.3.1의 앱 안 업데이트가 동작하지 않던 원인). 숨은 콘솔을 주는 CREATE_NO_WINDOW만 씁니다.
+    """
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    powershell = shutil.which("powershell") or "powershell"
+    flags = 0
+    if sys.platform.startswith("win"):
+        flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+    return subprocess.Popen(
+        [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+        creationflags=flags,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+    )
+
+
 def prepare(info: ReleaseInfo, work_dir: Path, downloaded: Path) -> Path:
     """내려받은 파일을 설치할 수 있는 형태로: 설치 프로그램은 그대로, zip은 압축 해제한 폴더."""
     if info.kind == "installer":
@@ -323,14 +344,5 @@ def launch_update(kind: str, prepared: Path, work_dir: Path, log_path: Path) -> 
         script = build_setup_script(os.getpid(), prepared, target, work_dir, log_path)
     else:
         script = build_install_script(os.getpid(), prepared, target, work_dir, log_path)
-    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-    powershell = shutil.which("powershell") or "powershell"
-    flags = 0
-    if sys.platform.startswith("win"):
-        flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen(
-        [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-EncodedCommand", encoded],
-        creationflags=flags,
-        close_fds=True,
-    )
+    spawn_hidden_powershell(script)
     log.info("업데이트 설치 스크립트 실행 (%s): %s -> %s", kind, prepared, target)

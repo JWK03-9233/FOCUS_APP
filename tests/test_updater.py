@@ -157,3 +157,36 @@ def test_setup_script_waits_only_for_installer_and_passes_silent_args():
     assert "/VERYSILENT" in script and "/RESTARTAPP=1" in script and "/DIR=" in script
     assert "$argList -Wait" not in script  # 자식(재실행된 앱)까지 기다리지 않도록
     assert "WaitForExit()" in script
+
+
+@pytest.mark.skipif(not sys.platform.startswith("win"), reason="Windows PowerShell 전용")
+def test_real_spawn_path_runs_after_parent_exits(tmp_path):
+    """앱이 실제로 쓰는 실행 방식(spawn_hidden_powershell)으로, 띄운 쪽이 바로 종료되어도 설치가 끝까지 되는지.
+
+    v0.3.0~0.3.1은 DETACHED_PROCESS 때문에 PowerShell이 아무것도 하지 않고 끝나 업데이트가 안 됐음.
+    """
+    target = tmp_path / "install"
+    new = tmp_path / "work" / "new" / "FocusApp"
+    target.mkdir(parents=True)
+    new.mkdir(parents=True)
+    harmless = Path(r"C:\Windows\System32\whoami.exe")
+    (target / "FocusApp.exe").write_bytes(harmless.read_bytes())
+    (new / "FocusApp.exe").write_bytes(harmless.read_bytes())
+    (new / "marker.txt").write_text("new")
+    log = tmp_path / "update.log"
+
+    # '앱' 역할의 자식 파이썬: 자기 pid를 기다리는 설치 스크립트를 띄우고 곧바로 종료
+    child = f"""
+import os, sys
+sys.path.insert(0, {str(Path(__file__).resolve().parent.parent)!r})
+from pathlib import Path
+from focus_app import updater
+s = updater.build_install_script(os.getpid(), Path({str(new)!r}), Path({str(target)!r}), Path({str(tmp_path / "work")!r}), Path({str(log)!r}))
+updater.spawn_hidden_powershell(s)
+"""
+    subprocess.run([sys.executable, "-c", child], timeout=30, check=True)
+    deadline = time.time() + 60
+    while time.time() < deadline and not (target / "marker.txt").exists():
+        time.sleep(0.5)
+    assert (target / "marker.txt").read_text() == "new"
+    assert "files replaced" in log.read_text(encoding="utf-8-sig")

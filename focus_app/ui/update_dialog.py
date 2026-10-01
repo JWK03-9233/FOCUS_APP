@@ -90,6 +90,7 @@ class UpdateDialog(QDialog):
         layout.addStretch(0)
 
         self.progress = QProgressBar()
+        self.progress.setTextVisible(False)  # 얇은 막대라 글자가 잘림 -> 퍼센트는 아래 상태 줄에 표시
         self.progress.setRange(0, 0)
         layout.addWidget(self.progress)
         self.status = QLabel("")
@@ -213,7 +214,7 @@ class UpdateDialog(QDialog):
     def _on_progress(self, done: int, total: int) -> None:
         if total > 0:
             self.progress.setValue(int(1000 * done / total))
-            self.status.setText(f"내려받는 중… {done / 2**20:.1f} / {total / 2**20:.1f} MB")
+            self.status.setText(f"내려받는 중… {100 * done // total}%  ·  {done / 2**20:.1f} / {total / 2**20:.1f} MB")
         else:
             self.status.setText(f"내려받는 중… {done / 2**20:.1f} MB")
 
