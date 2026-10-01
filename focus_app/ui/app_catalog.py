@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,7 +14,7 @@ from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QFileIconProvider
 
 from focus_app import winapi
-from focus_app.config import friendly_name, normalize_exe
+from focus_app.config import KNOWN_APP_NAMES, friendly_name, normalize_exe
 from focus_app.enforcer import SYSTEM_EXES
 
 # 시작 메뉴 바로가기 중 앱 목록에 넣지 않을 것 (제거 프로그램, 설명서 등)
@@ -49,9 +50,55 @@ def _start_menu_dirs() -> List[Path]:
     return [d for d in dirs if d.is_dir()]
 
 
-def scan_installed_apps() -> List[AppEntry]:
-    """시작 메뉴 바로가기(.lnk)를 실행 파일로 풀어 설치된 앱 목록을 만듭니다. 수 초 걸릴 수 있습니다."""
-    result: Dict[str, AppEntry] = {}
+# 실행 파일 이름이 이런 것이면 앱이 아니라 설치·제거·업데이트 도구로 봄
+_SKIP_EXE_WORDS = (
+    "unins", "uninst", "setup", "install", "update", "updater", "crashpad", "crashreport", "helper",
+    "server", "process", "agent", "dialog",
+)
+
+
+# 앱이 아닌 것: 런타임·드라이버 등 (설치 정보의 표시 이름 기준)
+_SKIP_NAME_WORDS = ("redistributable", "runtime", "driver", "sdk", "microsoft 365 -", "visual c++")
+# 설치 프로그램이 아이콘용으로 남겨 둔 복사본이 있는 폴더
+_SKIP_DIR_WORDS = ("\\windows\\installer\\", "\\package cache\\")
+
+
+def is_gui_exe(path: str) -> bool:
+    """창을 띄우는 프로그램인지 (PE 헤더의 Subsystem이 Windows GUI). 명령줄 도구는 False."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4096)
+        if head[:2] != b"MZ":
+            return False
+        pe = int.from_bytes(head[0x3C:0x40], "little")
+        if head[pe:pe + 4] != b"PE\0\0":
+            return False
+        subsystem = int.from_bytes(head[pe + 24 + 68:pe + 24 + 70], "little")
+        return subsystem == 2  # IMAGE_SUBSYSTEM_WINDOWS_GUI
+    except (OSError, ValueError):
+        return False
+
+
+def _usable_exe(path: str) -> Optional[str]:
+    """앱 목록에 넣을 만한 실제 실행 파일 경로면 정리해서 돌려줍니다."""
+    if not path:
+        return None
+    path = os.path.expandvars(path.strip().strip('"'))
+    if "," in path and not path.lower().endswith(".exe"):
+        path = path.rsplit(",", 1)[0].strip().strip('"')  # DisplayIcon 값 예: "C:\\Apps\\b.exe,0"
+    if not path.lower().endswith(".exe") or not os.path.isfile(path):
+        return None
+    exe = normalize_exe(path)
+    if exe in SYSTEM_EXES or any(w in exe for w in _SKIP_EXE_WORDS):
+        return None
+    path = path.replace("/", "\\")
+    if any(w in path.lower() for w in _SKIP_DIR_WORDS):
+        return None
+    return path
+
+
+def _start_menu_apps() -> List[AppEntry]:
+    out = []
     for base in _start_menu_dirs():
         for lnk in base.rglob("*.lnk"):
             name = lnk.stem.strip()
@@ -61,14 +108,105 @@ def scan_installed_apps() -> List[AppEntry]:
                 target = QFileInfo(str(lnk)).symLinkTarget()
             except Exception:  # noqa: BLE001 - 깨진 바로가기는 건너뜀
                 continue
-            if not target.lower().endswith(".exe"):
-                continue
-            if not os.path.isfile(target):
-                continue  # 앱을 지워도 시작 메뉴 바로가기가 남는 경우가 많음 -> 실제 exe가 있을 때만
-            exe = normalize_exe(target)
-            if exe in SYSTEM_EXES or exe in result:
-                continue
-            result[exe] = AppEntry(exe=exe, name=name, path=target.replace("/", "\\"))
+            # 앱을 지워도 시작 메뉴 바로가기가 남는 경우가 많음 -> 실제 exe가 있을 때만
+            path = _usable_exe(target)
+            if path:
+                out.append(AppEntry(exe=normalize_exe(path), name=name, path=path))
+    return out
+
+
+_UNINSTALL_KEYS = [
+    ("HKEY_CURRENT_USER", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ("HKEY_LOCAL_MACHINE", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ("HKEY_LOCAL_MACHINE", r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+]
+_APP_PATHS_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"
+
+
+def _registry_apps() -> List[AppEntry]:
+    """Windows '설치된 앱' 목록(제거 정보)과 App Paths에서 찾기.
+
+    시작 메뉴 바로가기를 만들지 않는 앱(예: 사용자 폴더에 설치한 SumatraPDF)도 여기에는 등록됩니다.
+    """
+    if not sys.platform.startswith("win"):
+        return []
+    import winreg
+
+    def value(key, name):
+        try:
+            return str(winreg.QueryValueEx(key, name)[0] or "")
+        except OSError:
+            return ""
+
+    out: List[AppEntry] = []
+    for hive_name, path in _UNINSTALL_KEYS:
+        try:
+            root = winreg.OpenKey(getattr(winreg, hive_name), path)
+        except OSError:
+            continue
+        with root:
+            for i in range(winreg.QueryInfoKey(root)[0]):
+                try:
+                    sub = winreg.OpenKey(root, winreg.EnumKey(root, i))
+                except OSError:
+                    continue
+                with sub:
+                    name = value(sub, "DisplayName").strip()
+                    # 숨은 구성 요소·업데이트 항목은 제외
+                    if not name or value(sub, "SystemComponent") == "1" or value(sub, "ParentKeyName"):
+                        continue
+                    if any(w in name.lower() for w in _SKIP_WORDS + _SKIP_NAME_WORDS):
+                        continue
+                    exe_path = _usable_exe(value(sub, "DisplayIcon"))
+                    if not exe_path:
+                        # 아이콘 정보가 없으면 설치 폴더 바로 아래의 실행 파일이 하나뿐일 때만 사용
+                        loc = value(sub, "InstallLocation").strip().strip('"')
+                        if loc and os.path.isdir(loc):
+                            exes = [p for p in (_usable_exe(str(f)) for f in Path(loc).glob("*.exe")) if p]
+                            exe_path = exes[0] if len(exes) == 1 else None
+                    if exe_path and is_gui_exe(exe_path):
+                        out.append(AppEntry(exe=normalize_exe(exe_path), name=name, path=exe_path))
+
+    windir = os.environ.get("WINDIR", r"C:\Windows").lower()
+    for hive_name in ("HKEY_CURRENT_USER", "HKEY_LOCAL_MACHINE"):
+        try:
+            root = winreg.OpenKey(getattr(winreg, hive_name), _APP_PATHS_KEY)
+        except OSError:
+            continue
+        with root:
+            for i in range(winreg.QueryInfoKey(root)[0]):
+                try:
+                    with winreg.OpenKey(root, winreg.EnumKey(root, i)) as sub:
+                        exe_path = _usable_exe(value(sub, ""))
+                except OSError:
+                    continue
+                if not exe_path or not is_gui_exe(exe_path):
+                    continue
+                exe = normalize_exe(exe_path)
+                # Office 내부 도구(mso*.exe)와 공용 구성 요소 폴더의 도구는 앱이 아님
+                low = exe_path.lower()
+                if exe.startswith("mso") or "common files" in low or "windows mail" in low:
+                    continue
+                # Windows 폴더의 도구는 잘 알려진 앱(메모장·그림판 등)만
+                if exe_path.lower().startswith(windir) and exe not in KNOWN_APP_NAMES:
+                    continue
+                out.append(AppEntry(exe=exe, name=friendly_name(exe_path), path=exe_path))
+    return out
+
+
+def scan_installed_apps() -> List[AppEntry]:
+    """설치된 앱 목록: 시작 메뉴 바로가기 + Windows 설치 정보(레지스트리). 수 초 걸릴 수 있습니다.
+
+    같은 앱은 시작 메뉴 이름을 우선합니다 (보통 더 읽기 쉬움).
+    """
+    result: Dict[str, AppEntry] = {}
+    for source in (_start_menu_apps, _registry_apps):
+        try:
+            entries = source()
+        except Exception:  # noqa: BLE001 - 한 출처가 실패해도 나머지는 보여 줌
+            continue
+        for e in entries:
+            result.setdefault(e.exe, e)
     return sorted(result.values(), key=lambda e: e.name.lower())
 
 

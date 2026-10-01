@@ -413,3 +413,25 @@ def test_picker_checkbox_square_and_row_both_toggle_once(qapp):
     QTest.mouseClick(lst.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(rect.center().x() + 80, rect.center().y()))
     assert item.checkState() == Qt.CheckState.Unchecked  # 이름 부분
     assert lst.focusPolicy() == Qt.FocusPolicy.NoFocus  # 포커스 테두리로 목록이 출렁이지 않게
+
+
+def test_installed_app_filters(tmp_path):
+    import sys as _sys
+
+    from focus_app.ui import app_catalog as cat
+
+    # 실행 파일이 없거나, 설치·제거 도구거나, 설치 캐시 폴더에 있는 것은 제외
+    assert cat._usable_exe(str(tmp_path / "missing.exe")) is None
+    for name in ("unins000.exe", "Setup.exe", "fooUpdater.exe"):
+        (tmp_path / name).write_bytes(b"MZ")
+        assert cat._usable_exe(str(tmp_path / name)) is None
+    cache = tmp_path / "Package Cache"
+    cache.mkdir()
+    (cache / "app.exe").write_bytes(b"MZ")
+    assert cat._usable_exe(str(cache / "app.exe")) is None
+    (tmp_path / "Real.exe").write_bytes(b"MZ")
+    assert cat._usable_exe(f'"{tmp_path / "Real.exe"}",0') == str(tmp_path / "Real.exe")  # DisplayIcon 형식
+    if _sys.platform.startswith("win"):
+        assert cat.is_gui_exe(r"C:\Windows\notepad.exe")
+        assert not cat.is_gui_exe(r"C:\Windows\System32\cmd.exe")  # 명령줄 도구
+    assert not cat.is_gui_exe(str(tmp_path / "Real.exe"))  # PE가 아님

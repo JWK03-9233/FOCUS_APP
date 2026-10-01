@@ -70,6 +70,14 @@ KNOWN_APP_NAMES: Dict[str, str] = {
     "zoom.exe": "Zoom",
     "windowsterminal.exe": "터미널",
     "sumatrapdf.exe": "SumatraPDF",
+    "wt.exe": "Windows 터미널",
+    "snippingtool.exe": "캡처 도구",
+    "gom.exe": "곰플레이어",
+    "itunes.exe": "iTunes",
+    "appletv.exe": "Apple TV",
+    "mscopilot.exe": "Copilot",
+    "honeyview.exe": "꿀뷰",
+    "skype.exe": "Skype",
 }
 
 
