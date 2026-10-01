@@ -21,7 +21,7 @@ from focus_app.ui.main_window import MainWindow
 from focus_app.ui.allowed_apps_dialog import AllowedAppsDialog
 from focus_app.ui.end_dialog import FocusEndDialog
 from focus_app.ui.preferences_dialog import PreferencesDialog
-from focus_app.ui.theme import STYLESHEET
+from focus_app.ui.window_state import WindowStateManager
 from focus_app.ui.unlock_dialog import confirm_with_code
 from focus_app.ui.update_dialog import UpdateDialog, _Bridge, _safe_emit, run_in_thread
 from focus_app.version import APP_NAME, __version__
@@ -32,8 +32,9 @@ log = logging.getLogger(__name__)
 class FocusApp:
     def __init__(self, app: QApplication, show_window: bool = True, check_updates: bool = False) -> None:
         self.app = app
-        app.setStyleSheet(STYLESHEET)
         self.settings = Settings.load()
+        # 공통 스타일(저장된 화면 크기로) 적용 + 모든 창의 확대·축소와 위치·크기 기억
+        self.window_state = WindowStateManager(app, self.settings, self._safe_save_settings)
         self.session: Optional[FocusSession] = None
         self.monitor: Optional[AllowlistMonitor] = None
         self._dialog_open = False
@@ -94,6 +95,8 @@ class FocusApp:
 
     # ------------------------------------------------------------- 창
     def show_window(self) -> None:
+        if self.session is not None:
+            self.window.set_open_apps(winapi.running_exe_names())
         self.window.showNormal()
         self.window.raise_()
         self.window.activateWindow()
@@ -206,6 +209,8 @@ class FocusApp:
             else:
                 self._set_icon("active")
             self.window.update_running(s, blocked)
+            if self.window.isVisible():  # 창이 보일 때만 확인 (실행 중인 앱 옆에 점)
+                self.window.set_open_apps(winapi.running_exe_names())
         self.status_action.setText(text)
         self.tray.setToolTip(tip)
         pending = self.active and self.session.emergency_at is not None
@@ -497,6 +502,7 @@ class FocusApp:
 
     def _shutdown(self) -> None:
         self.tray.hide()
+        self.window_state.flush()  # 막 옮기거나 크기를 바꾼 창이 있으면 바로 저장
         self.window.allow_close = True
         self.window.close()  # closeEvent에서 창 위치·크기를 저장
         self.app.quit()
@@ -511,6 +517,9 @@ class FocusApp:
         self._dialog_open = True
         try:
             parent = self.window if self.window.isVisible() else None
-            return confirm_with_code(self.settings.unlock_code_length, purpose, parent=parent)
+            return confirm_with_code(
+                self.settings.unlock_code_length, purpose, parent=parent,
+                complexity=self.settings.unlock_code_complexity,
+            )
         finally:
             self._dialog_open = False

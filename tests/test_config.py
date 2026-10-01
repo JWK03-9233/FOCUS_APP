@@ -50,7 +50,8 @@ def test_settings_load_tolerates_garbage(tmp_path):
     s = Settings.load(path)
     assert s.active_profile == "공부용"
     assert s.poll_interval_ms == 100
-    assert s.unlock_code_length == 128
+    assert s.unlock_code_length == 256  # 최대 길이
+    assert Settings.from_dict({"unlock_code_length": 10}).unlock_code_length == 32  # 최소 길이
 
 
 def test_profile_management_rules():

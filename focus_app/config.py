@@ -12,6 +12,9 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from focus_app.unlock import MAX_LENGTH as UNLOCK_MAX_LENGTH
+from focus_app.unlock import MIN_LENGTH as UNLOCK_MIN_LENGTH
+from focus_app.unlock import clean_complexity
 from focus_app.version import APP_ID
 
 
@@ -159,11 +162,15 @@ class Settings:
     profiles: List[Profile] = field(default_factory=default_profiles)
     active_profile: str = "공부용"
     poll_interval_ms: int = 300  # 포그라운드 창 확인 주기
-    unlock_code_length: int = 32  # 해제용 랜덤 문자열 길이
+    unlock_code_length: int = 32  # 해제용 랜덤 문자열 길이 (32~256)
+    unlock_code_complexity: str = "basic"  # basic / symbols / max (focus_app.unlock.COMPLEXITY)
     default_duration_minutes: int = 50  # 마지막으로 고른 집중 시간. 0이면 "끝낼 때까지"
     duration_presets: List[int] = field(default_factory=lambda: list(DEFAULT_DURATION_PRESETS))
     custom_duration_minutes: int = 45  # "직접 입력" 칸에 마지막으로 넣은 값
     window_geometry: str = ""  # 메인 창 위치·크기 (Qt saveGeometry의 base64)
+    # 대화상자별 마지막 위치·크기: 창 종류 이름(클래스 이름) -> saveGeometry의 base64
+    window_geometries: Dict[str, str] = field(default_factory=dict)
+    ui_zoom: int = 100  # 화면 크기 (%). Ctrl +/−/0, Ctrl+마우스 휠로 바꿈
     check_updates_on_start: bool = True  # 실행할 때 새 버전이 있는지 확인
     github_token: str = ""  # 비공개 저장소에서 업데이트를 받을 때만 필요 (읽기 권한 토큰)
     favorite_apps: List[str] = field(default_factory=list)  # 앱 고르기 창 맨 위에 보일 즐겨찾기 (실행 파일 이름)
@@ -289,7 +296,8 @@ class Settings:
                 if isinstance(info, dict):
                     settings.remember_app(str(exe), str(info.get("name", "")), str(info.get("path", "")))
         for f in fields(cls):
-            if f.name in ("profiles", "app_info", "duration_presets", "favorite_apps", "hidden_apps") or f.name not in raw:
+            if f.name in ("profiles", "app_info", "duration_presets", "favorite_apps", "hidden_apps",
+                          "window_geometries") or f.name not in raw:
                 continue
             value = raw[f.name]
             current = getattr(settings, f.name)
@@ -304,10 +312,15 @@ class Settings:
                 value = str(value)
             setattr(settings, f.name, value)
         settings.poll_interval_ms = max(100, min(5000, settings.poll_interval_ms))
-        settings.unlock_code_length = max(8, min(128, settings.unlock_code_length))
+        settings.unlock_code_length = max(UNLOCK_MIN_LENGTH, min(UNLOCK_MAX_LENGTH, settings.unlock_code_length))
+        settings.unlock_code_complexity = clean_complexity(settings.unlock_code_complexity)
         settings.emergency_delay_minutes = max(1, min(240, settings.emergency_delay_minutes))
         settings.default_duration_minutes = max(0, min(1440, settings.default_duration_minutes))
         settings.custom_duration_minutes = max(1, min(1440, settings.custom_duration_minutes))
+        settings.ui_zoom = max(80, min(200, settings.ui_zoom))
+        geometries = raw.get("window_geometries")
+        if isinstance(geometries, dict):
+            settings.window_geometries = {str(k): str(v) for k, v in geometries.items() if isinstance(v, str) and v}
         settings.duration_presets = clean_presets(raw.get("duration_presets", DEFAULT_DURATION_PRESETS))
         for key in ("favorite_apps", "hidden_apps"):
             values = raw.get(key)

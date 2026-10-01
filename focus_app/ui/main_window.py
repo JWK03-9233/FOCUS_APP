@@ -9,9 +9,10 @@ import time
 from typing import List, Optional
 
 from PySide6.QtCore import QByteArray, QEvent, QObject, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QKeyEvent
+from PySide6.QtGui import QCloseEvent, QColor, QKeyEvent, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QButtonGroup,
     QFrame,
     QHBoxLayout,
@@ -27,19 +28,24 @@ from PySide6.QtWidgets import (
     QRadioButton,
     QSpinBox,
     QStackedWidget,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
 
 from focus_app.config import Profile, Settings
 from focus_app.session import FocusSession, format_duration, format_minutes
-from focus_app.ui import app_catalog, icons
+from focus_app.ui import app_catalog, icons, theme
 from focus_app.ui.app_picker import AppPickerDialog
 from focus_app.ui.preset_dialog import PresetDialog
+from focus_app.ui.theme import ACCENT
 from focus_app.version import APP_NAME, __version__
 
 CUSTOM_ID = 100000  # 분 값(최대 1440)과 겹치지 않는 id. -1은 Qt가 "자동 지정"으로 해석해 쓰면 안 됨
 UNLIMITED_ID = 0
+OPEN_ROLE = Qt.ItemDataRole.UserRole + 1  # 진행 화면의 허용 앱이 지금 실행 중인지
 
 
 def _label(text: str = "", name: str = "", wrap: bool = False) -> QLabel:
@@ -114,7 +120,7 @@ class ModeRow(QWidget):
         col.setContentsMargins(16, 8, 8, 8)
         col.setSpacing(2)
         title = QLabel(profile.name)
-        title.setStyleSheet("font-weight: 600; font-size: 11pt; background: transparent;")
+        title.setObjectName("modeRowTitle")
         col.addWidget(title)
         summary = _label(mode_summary(profile), "hint")
         summary.setStyleSheet("background: transparent;")
@@ -145,6 +151,38 @@ class _LaunchCursorFilter(QObject):
         return False
 
 
+class _RunAppDelegate(QStyledItemDelegate):
+    """'지금 쓸 수 있는 앱' 항목: 앱이 실행 중이면 이름 오른쪽에 작은 점 (Dock처럼)."""
+
+    DOT = 6
+    GAP = 14  # 점이 들어갈 자리. 점이 생기고 없어질 때 목록이 출렁이지 않게 항상 비워 둠
+
+    def sizeHint(self, option, index) -> QSize:  # noqa: N802
+        size = super().sizeHint(option, index)
+        if index.data(Qt.ItemDataRole.UserRole):
+            size.setWidth(size.width() + self.GAP)
+        return size
+
+    def paint(self, painter: QPainter, option, index) -> None:
+        super().paint(painter, option, index)
+        if not index.data(OPEN_ROLE):
+            return
+        # 이름 바로 뒤에 붙여야 옆 앱의 점으로 보이지 않음
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        text_rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, opt.widget)
+        text_end = text_rect.left() + min(text_rect.width(), opt.fontMetrics.horizontalAdvance(opt.text))
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(ACCENT))
+        x = text_end + 6
+        y = option.rect.center().y() - self.DOT / 2 + 1
+        painter.drawEllipse(int(x), int(y), self.DOT, self.DOT)
+        painter.restore()
+
+
 class MainWindow(QMainWindow):
     start_requested = Signal(str, object)  # 모드 이름, 분(None이면 제한 없음)
     stop_requested = Signal()
@@ -159,6 +197,7 @@ class MainWindow(QMainWindow):
     def __init__(self, settings: Settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.settings = settings
+        self._open_apps: set = set()  # 지금 실행 중인 앱 (진행 화면의 점 표시용)
         self._restoring = True  # 화면을 채우는 동안에는 선택 변경을 저장하지 않음
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(icons.app_icon())
@@ -225,7 +264,7 @@ class MainWindow(QMainWindow):
         body.setSpacing(12)
 
         left = _card()
-        left.setFixedWidth(220)
+        left.setProperty("leftPanel", True)  # 너비는 theme에서 (화면 크기에 따라 같이 커짐)
         ll = QVBoxLayout(left)
         ll.setContentsMargins(10, 12, 10, 10)
         ll.addWidget(_label("① 모드 고르기", "sectionTitle"))
@@ -360,7 +399,7 @@ class MainWindow(QMainWindow):
         for p in self.settings.profiles:
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, p.name)
-            item.setSizeHint(QSize(0, 62))
+            item.setSizeHint(QSize(0, theme.px(62)))
             self.mode_list.addItem(item)
             self.mode_list.setItemWidget(item, ModeRow(p))
             if p.name == select:
@@ -427,7 +466,7 @@ class MainWindow(QMainWindow):
         for exe in apps:
             row = AppRow(self.settings.app_display_name(exe), exe, self._app_path(exe), self._remove_app)
             item = QListWidgetItem()
-            item.setSizeHint(QSize(0, 46))
+            item.setSizeHint(QSize(0, theme.px(46)))
             self.app_list.addItem(item)
             self.app_list.setItemWidget(item, row)
         self.apps_stack.setCurrentWidget(self.app_list)
@@ -722,6 +761,7 @@ class MainWindow(QMainWindow):
         self.run_apps.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self.run_apps.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._run_apps_cursor = _LaunchCursorFilter(self.run_apps)
+        self.run_apps.setItemDelegate(_RunAppDelegate(self.run_apps))
         self.run_apps.itemClicked.connect(self._on_run_app_clicked)
         cl.addWidget(self.run_apps, 1)
         cl.addWidget(_label("작업 표시줄, 시작 메뉴, 작업 관리자, Windows 설정은 항상 쓸 수 있습니다.", "hint", True))
@@ -776,8 +816,8 @@ class MainWindow(QMainWindow):
                 name = self.settings.app_display_name(exe)
                 item = QListWidgetItem(app_catalog.app_icon(self._app_path(exe), name), name)
                 item.setData(Qt.ItemDataRole.UserRole, exe)
-                item.setToolTip(f"눌러서 {name} 열기")
                 self.run_apps.addItem(item)
+            self.set_open_apps(self._open_apps, force=True)
             if not apps:
                 self.run_apps.addItem("(없음 — 시스템 요소만 쓸 수 있습니다)")
         else:
@@ -815,6 +855,22 @@ class MainWindow(QMainWindow):
         if pending:
             left = format_duration(session.emergency_remaining_seconds(now))
             self.emergency_label.setText(f"<b>비상 해제 대기 중</b> — {left} 뒤에 차단이 풀립니다.")
+
+    def set_open_apps(self, running: set, force: bool = False) -> None:
+        """실행 중인 앱(실행 파일 이름, 소문자)을 받아 진행 화면의 앱 옆 점과 설명을 갱신합니다."""
+        if running == self._open_apps and not force:
+            return
+        self._open_apps = set(running)
+        for i in range(self.run_apps.count()):
+            item = self.run_apps.item(i)
+            exe = item.data(Qt.ItemDataRole.UserRole)
+            if not exe:
+                continue
+            is_open = exe in self._open_apps
+            name = item.text()
+            if bool(item.data(OPEN_ROLE)) != is_open or force:
+                item.setData(OPEN_ROLE, is_open)
+                item.setToolTip(f"{name} 실행 중 · 눌러서 앞으로 가져오기" if is_open else f"눌러서 {name} 열기")
 
     def _on_run_app_clicked(self, item: QListWidgetItem) -> None:
         exe = item.data(Qt.ItemDataRole.UserRole)

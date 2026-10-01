@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 
 from focus_app.config import friendly_name, normalize_exe
 from focus_app.enforcer import SYSTEM_EXES
-from focus_app.ui import app_catalog
+from focus_app.ui import app_catalog, theme
 from focus_app.ui.app_catalog import AppEntry
 
 _ROLE_EXE = Qt.ItemDataRole.UserRole
@@ -270,7 +270,7 @@ class AppPickerDialog(QDialog):
         item.setData(_ROLE_FAVORITE, favorite)
         item.setData(_ROLE_HIDDEN, hidden)
         item.setData(_ROLE_USABLE, entry.usable)
-        item.setSizeHint(QSize(0, 34))
+        item.setSizeHint(QSize(0, theme.px(34)))
         if not entry.usable:
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             item.setToolTip("실행 파일을 찾지 못해 고를 수 없습니다. 아래 '실행 파일(.exe) 직접 찾기'로 추가하세요.")

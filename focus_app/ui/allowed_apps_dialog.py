@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from focus_app.config import Profile, Settings, normalize_exe
-from focus_app.ui import app_catalog
+from focus_app.ui import app_catalog, theme
 from focus_app.ui.app_catalog import AppEntry
 from focus_app.ui.app_picker import AppPickerDialog
 from focus_app.ui.main_window import AppRow
@@ -94,7 +94,7 @@ class AllowedAppsDialog(QDialog):
         for exe in self._apps:
             row = AppRow(self._name(exe), exe, self._path(exe), self.remove_app)
             item = QListWidgetItem()
-            item.setSizeHint(QSize(0, 46))
+            item.setSizeHint(QSize(0, theme.px(46)))
             self.list.addItem(item)
             self.list.setItemWidget(item, row)
 

@@ -620,8 +620,12 @@ def test_end_popup_on_expiry_brings_only_focusapp_to_front(qapp, monkeypatch):
     from focus_app import winapi
     from focus_app.ui.end_dialog import FocusEndDialog
 
+    from focus_app.monitor import AllowlistMonitor
+
     fronted = []
     monkeypatch.setattr(winapi, "bring_to_front", lambda hwnd: fronted.append(hwnd) or True)
+    # 기다리는 동안 실제 감시가 돌면 지금 앞에 있는 진짜 창(편집기 등)을 막아 횟수가 바뀌고 그 창이 최소화됨
+    monkeypatch.setattr(AllowlistMonitor, "poll", lambda self: None)
     ctl = _controller(qapp)
     try:
         ctl.start_focus(ctl.settings.active_profile, 30)
@@ -821,3 +825,49 @@ def test_unlimited_session_hides_timer(qapp):
     assert "직접 끝낼 때까지" in w.run_info.text()
     w.show_running(FocusSession.start(p.name, 30), p)  # 시간을 정한 집중이면 다시 보임
     assert not w.timer_label.isHidden() and not w.progress.isHidden()
+
+
+def test_launch_app_brings_existing_window_instead_of_opening_new(monkeypatch):
+    from focus_app import winapi
+
+    fronted, started = [], []
+    monkeypatch.setattr(winapi, "bring_to_front", lambda hwnd: fronted.append(hwnd) or True)
+    monkeypatch.setattr(app_catalog, "launch_target", lambda exe, path="": "C:\apps\notepad.exe")
+    monkeypatch.setattr(app_catalog.os, "startfile", lambda *a, **k: started.append(a[0]), raising=False)
+    monkeypatch.setattr(app_catalog.sys, "platform", "win32")
+
+    # 창이 있으면 (뒤에 있거나 최소화) 그 창을 앞으로, 새로 열지 않음
+    monkeypatch.setattr(winapi, "find_app_window", lambda exe: 77 if exe == "notepad.exe" else 0)
+    assert app_catalog.launch_app("Notepad.exe")
+    assert fronted == [77] and started == []
+
+    # 창이 없으면 (꺼져 있거나 트레이에만 있음) 실행
+    monkeypatch.setattr(winapi, "find_app_window", lambda exe: 0)
+    assert app_catalog.launch_app("notepad.exe")
+    assert fronted == [77] and started == ["C:\apps\notepad.exe"]
+
+
+def test_open_apps_get_a_dot_and_tooltip(qapp):
+    from focus_app.ui.main_window import OPEN_ROLE
+
+    s, w = make_window(qapp)
+    p = s.current_profile()
+    p.block_everything = True
+    p.allowed_apps = ["hwp.exe", "notepad.exe"]
+    w.show_running(FocusSession.start(p.name, 30), p)
+    items = {w.run_apps.item(i).data(Qt.ItemDataRole.UserRole): w.run_apps.item(i) for i in range(2)}
+    assert not any(it.data(OPEN_ROLE) for it in items.values())
+
+    w.set_open_apps({"notepad.exe", "explorer.exe"})
+    assert items["notepad.exe"].data(OPEN_ROLE) and not items["hwp.exe"].data(OPEN_ROLE)
+    assert "실행 중" in items["notepad.exe"].toolTip() and "열기" in items["hwp.exe"].toolTip()
+
+    w.set_open_apps(set())  # 앱을 닫으면 점이 사라짐
+    assert not items["notepad.exe"].data(OPEN_ROLE)
+
+    # 모드를 다시 그려도 (허용 앱 편집 등) 실행 중 표시는 유지
+    w.set_open_apps({"hwp.exe"})
+    w.show_running(FocusSession.start(p.name, 30), p)
+    hwp = next(w.run_apps.item(i) for i in range(2) if w.run_apps.item(i).data(Qt.ItemDataRole.UserRole) == "hwp.exe")
+    assert hwp.data(OPEN_ROLE)
+    w.grab()  # 점 그리기에서 오류가 나지 않는지

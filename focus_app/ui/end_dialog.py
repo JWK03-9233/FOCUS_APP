@@ -33,7 +33,7 @@ class FocusEndDialog(QDialog):
 
         emergency = reason == "emergency"
         icon = QLabel("⏰" if emergency else "🎉")
-        icon.setStyleSheet("font-size: 34pt;")
+        icon.setObjectName("endIcon")
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(icon)
 

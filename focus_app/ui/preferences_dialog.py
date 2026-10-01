@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QFormLayout,
     QHBoxLayout,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from focus_app import unlock
 from focus_app.config import Settings
 
 
@@ -49,11 +51,27 @@ class PreferencesDialog(QDialog):
         form.setVerticalSpacing(4)
 
         self.code_len = QSpinBox()
-        self.code_len.setRange(8, 128)
+        self.code_len.setRange(unlock.MIN_LENGTH, unlock.MAX_LENGTH)
+        self.code_len.setSingleStep(8)
         self.code_len.setSuffix(" 글자")
         self.code_len.setValue(settings.unlock_code_length)
         form.addRow(_field_label("해제 문자열 길이"), self.code_len)
-        form.addRow(_field_label(""), _hint("집중을 중간에 끝내려면 이 길이의 랜덤 문자열을 손으로 입력해야 합니다. 길수록 끄기 어렵습니다."))
+        self.code_kind = QComboBox()
+        for key, (label, _groups) in unlock.COMPLEXITY.items():
+            self.code_kind.addItem(label, key)
+        self.code_kind.setCurrentIndex(max(0, self.code_kind.findData(settings.unlock_code_complexity)))
+        form.addRow(_field_label("해제 문자열 종류"), self.code_kind)
+        self.code_example = QLabel("")
+        self.code_example.setObjectName("unlockExample")
+        self.code_example.setWordWrap(True)
+        form.addRow(_field_label("예시"), self.code_example)
+        form.addRow(_field_label(""), _hint(
+            f"집중을 중간에 끝내려면 이 랜덤 문자열을 손으로 입력해야 합니다. 길고 복잡할수록 끄기 어렵습니다 "
+            f"({unlock.MIN_LENGTH}~{unlock.MAX_LENGTH}글자)."
+        ))
+        self.code_len.valueChanged.connect(self._update_example)
+        self.code_kind.currentIndexChanged.connect(self._update_example)
+        self._update_example()
 
         self.quit_check = QCheckBox("집중 중에 FocusApp을 종료할 때도 문자열 입력 요구")
         self.quit_check.setChecked(settings.require_unlock_for_quit)
@@ -101,6 +119,14 @@ class PreferencesDialog(QDialog):
         layout.addWidget(self.strict_hint)
         self._refresh_helper()
 
+        title_v = QLabel("화면 크기")
+        title_v.setObjectName("sectionTitle")
+        layout.addWidget(title_v)
+        layout.addWidget(_hint(
+            "어느 창에서나 Ctrl + 마우스 휠, 또는 Ctrl + / Ctrl − 로 글자와 화면을 키우거나 줄일 수 있습니다. "
+            "Ctrl 0은 원래 크기. 창 위치와 크기는 창마다 마지막 상태로 다시 열립니다."
+        ))
+
         title3 = QLabel("업데이트")
         title3.setObjectName("sectionTitle")
         layout.addWidget(title3)
@@ -127,6 +153,10 @@ class PreferencesDialog(QDialog):
         buttons.addWidget(save)
         buttons.addWidget(cancel)
         layout.addLayout(buttons)
+
+    def _update_example(self) -> None:
+        code = unlock.generate_code(self.code_len.value(), self.code_kind.currentData())
+        self.code_example.setText(unlock.group_code(code))
 
     def _refresh_helper(self) -> None:
         from focus_app import helper
@@ -172,6 +202,7 @@ class PreferencesDialog(QDialog):
     def _save(self) -> None:
         s = self.settings
         s.unlock_code_length = int(self.code_len.value())
+        s.unlock_code_complexity = str(self.code_kind.currentData())
         s.require_unlock_for_quit = self.quit_check.isChecked()
         s.block_task_manager = self.strict_check.isChecked()
         s.show_block_notifications = self.notify_check.isChecked()

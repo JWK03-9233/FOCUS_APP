@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QKeySequence
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -66,9 +66,11 @@ class NoPasteLineEdit(QLineEdit):
 
 
 class UnlockDialog(QDialog):
-    def __init__(self, length: int, purpose: str = "집중 모드 해제", parent: QWidget | None = None) -> None:
+    def __init__(
+        self, length: int, purpose: str = "집중 모드 해제", parent: QWidget | None = None, complexity: str = "basic"
+    ) -> None:
         super().__init__(parent)
-        self.challenge = UnlockChallenge(length=length)
+        self.challenge = UnlockChallenge(length=length, complexity=complexity)
         self.setWindowTitle(f"{purpose} - 확인 문자열 입력")
         self.setModal(True)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
@@ -86,18 +88,11 @@ class UnlockDialog(QDialog):
         self.code_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self.code_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.code_label.setWordWrap(True)
-        font = QFont("Consolas")
-        font.setStyleHint(QFont.StyleHint.Monospace)
-        font.setPointSize(16)
-        self.code_label.setFont(font)
-        self.code_label.setStyleSheet(
-            "QLabel { background: rgba(127, 127, 127, 0.14); border: 1px solid rgba(127, 127, 127, 0.32);"
-            " padding: 16px; border-radius: 14px; letter-spacing: 1px; }"
-        )
+        self.code_label.setObjectName("unlockCode")  # 고정폭 큰 글씨 (theme)
         layout.addWidget(self.code_label)
 
         self.input = NoPasteLineEdit()
-        self.input.setFont(font)
+        self.input.setObjectName("unlockInput")
         self.input.setPlaceholderText("여기에 입력")
         self.input.returnPressed.connect(self._check)
         self.input.textChanged.connect(self._update_counter)
@@ -141,9 +136,9 @@ class UnlockDialog(QDialog):
         self._refresh()
 
 
-def confirm_with_code(length: int, purpose: str, parent: QWidget | None = None) -> bool:
+def confirm_with_code(length: int, purpose: str, parent: QWidget | None = None, complexity: str = "basic") -> bool:
     """대화상자를 띄우고 사용자가 올바르게 입력했을 때만 True."""
-    dlg = UnlockDialog(length=length, purpose=purpose, parent=parent)
+    dlg = UnlockDialog(length=length, purpose=purpose, parent=parent, complexity=complexity)
     dlg.show()
     dlg.raise_()
     dlg.activateWindow()

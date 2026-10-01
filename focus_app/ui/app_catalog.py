@@ -437,7 +437,10 @@ def launch_target(exe: str, known_path: str = "") -> str:
 
 
 def launch_app(exe: str, known_path: str = "") -> bool:
-    """허용 앱을 엽니다 (이미 떠 있으면 대개 그 창이 앞으로 옴). 열 대상을 못 찾으면 False."""
+    """허용 앱을 엽니다. 창이 이미 있으면(뒤에 있거나 최소화) 새로 열지 않고 그 창을 앞으로 가져옴.
+    트레이로만 떠 있으면 다시 실행해서 앱이 스스로 창을 띄우게 함. 열 대상을 못 찾으면 False."""
+    if bring_running_app_to_front(exe):
+        return True
     target = launch_target(exe, known_path)
     if not target or not sys.platform.startswith("win"):
         return False
@@ -449,6 +452,16 @@ def launch_app(exe: str, known_path: str = "") -> bool:
             os.startfile(target)  # type: ignore[attr-defined]
     except OSError:
         return False
+    return True
+
+
+def bring_running_app_to_front(exe: str) -> bool:
+    """이 앱의 창이 있으면 (최소화돼 있으면 복원해서) 앞으로 가져옵니다. 창이 없으면 False."""
+    hwnd = winapi.find_app_window(normalize_exe(exe))
+    if not hwnd:
+        return False
+    # 앞으로 가져오기가 Windows 포커스 제한에 막혀도 창은 이미 복원됨 -> 새로 열지 않음
+    winapi.bring_to_front(hwnd)
     return True
 
 

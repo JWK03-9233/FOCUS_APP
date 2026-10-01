@@ -25,6 +25,7 @@ TOKEN_INTEGRITY_LEVEL = 25  # TOKEN_INFORMATION_CLASS.TokenIntegrityLevel
 SECURITY_MANDATORY_HIGH_RID = 0x3000
 STILL_ACTIVE = 259
 ERROR_ALREADY_EXISTS = 183
+DWMWA_CLOAKED = 14
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,12 @@ if IS_WINDOWS:  # pragma: no cover - Windows 전용
     kernel32.GetExitCodeProcess.restype = wintypes.BOOL
     kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
     kernel32.CreateMutexW.restype = wintypes.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.Process32FirstW.restype = wintypes.BOOL
+    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.Process32NextW.restype = wintypes.BOOL
 
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
@@ -355,6 +362,84 @@ def focus_taskbar() -> bool:
         return False
     hwnd = int(user32.FindWindowW("Shell_TrayWnd", None) or 0)  # pragma: no cover
     return bring_to_front(hwnd) if hwnd else False  # pragma: no cover
+
+
+TH32CS_SNAPPROCESS = 0x00000002
+
+
+class _ProcessEntry(ctypes.Structure):  # PROCESSENTRY32W
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", ctypes.c_wchar * 260),
+    ]
+
+
+def running_exe_names() -> set:
+    """지금 실행 중인 프로세스의 실행 파일 이름들 (소문자). 관리자 권한 프로세스도 포함됩니다."""
+    if not IS_WINDOWS:
+        return set()
+    snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)  # pragma: no cover
+    if not snap or snap == wintypes.HANDLE(-1).value:  # pragma: no cover
+        return set()
+    names = set()  # pragma: no cover
+    try:  # pragma: no cover
+        entry = _ProcessEntry()
+        entry.dwSize = ctypes.sizeof(_ProcessEntry)
+        ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            names.add(entry.szExeFile.lower())
+            ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
+    finally:  # pragma: no cover
+        kernel32.CloseHandle(snap)
+    return names
+
+
+def _is_cloaked(hwnd: int) -> bool:  # pragma: no cover - Windows 전용
+    """보이는 것으로 표시되지만 실제로는 화면에 없는 창 (닫힌 뒤 남은 Store 앱 창 등)."""
+    try:
+        cloaked = wintypes.DWORD(0)
+        ctypes.windll.dwmapi.DwmGetWindowAttribute(
+            wintypes.HWND(hwnd), DWMWA_CLOAKED, ctypes.byref(cloaked), ctypes.sizeof(cloaked)
+        )
+        return bool(cloaked.value)
+    except (AttributeError, OSError):
+        return False
+
+
+def find_app_window(exe_name: str) -> int:
+    """이 실행 파일의 앱 창 중 가장 최근에 쓴 것 (최소화된 창 포함, 트레이로 숨긴 창은 제외). 없으면 0."""
+    if not IS_WINDOWS or not exe_name:
+        return 0
+    exe_name = exe_name.lower()  # pragma: no cover
+    found: List[int] = []  # pragma: no cover
+
+    def _cb(hwnd, _lparam):  # pragma: no cover
+        if not user32.IsWindowVisible(hwnd) or user32.GetWindow(hwnd, GW_OWNER):
+            return True
+        if user32.GetWindowLongW(hwnd, -20) & WS_EX_TOOLWINDOW:  # GWL_EXSTYLE
+            return True
+        if not window_title(int(hwnd)) or _is_cloaked(int(hwnd)):
+            return True
+        info = describe_window(int(hwnd))
+        exe = info.exe_name if info else ""
+        if exe == "applicationframehost.exe":  # Store 앱은 호스트 창 안의 실제 앱으로 판단
+            hosted = hosted_child_window(int(hwnd))
+            exe = hosted.exe_name if hosted else ""
+        if exe == exe_name:
+            found.append(int(hwnd))
+            return False  # EnumWindows는 앞에 있는 창부터 돌려주므로 처음 것이 가장 최근 창
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(_cb), 0)  # pragma: no cover
+    return found[0] if found else 0  # pragma: no cover
 
 
 def list_visible_windows() -> List[WindowInfo]:
