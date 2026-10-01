@@ -742,3 +742,46 @@ def test_tray_menu_lists_allowed_apps_and_launches(qapp, monkeypatch):
     finally:
         ctl._end_session("manual")
         _close(ctl)
+
+
+def test_hand_cursor_only_over_allowed_app_items(qapp):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+
+    s, w = make_window(qapp)
+    p = s.current_profile()
+    p.block_everything = True
+    p.allowed_apps = ["hwp.exe"]
+    w.resize(900, 700)
+    w.show()
+    w.show_running(FocusSession.start(p.name, 30), p)
+    qapp.processEvents()
+    vp = w.run_apps.viewport()
+    rect = w.run_apps.visualItemRect(w.run_apps.item(0))
+    QTest.mouseMove(vp, rect.center())
+    assert vp.cursor().shape() == Qt.CursorShape.PointingHandCursor
+    QTest.mouseMove(vp, QPoint(vp.width() - 5, vp.height() - 5))  # 앱이 없는 빈 곳
+    assert vp.cursor().shape() == Qt.CursorShape.ArrowCursor
+    w.hide()
+
+
+def test_tray_notifications_only_when_an_app_is_blocked(qapp, monkeypatch):
+    from focus_app.enforcer import ForegroundWindow
+
+    ctl = _controller(qapp)
+    shown = []
+    monkeypatch.setattr(ctl.tray, "showMessage", lambda *a, **k: shown.append(a[1]))
+    try:
+        ctl.window.show()
+        ctl.window.close()  # 트레이로 숨김 -> 안내 없음
+        ctl.start_focus(ctl.settings.active_profile, 30)  # 시작 안내 없음
+        assert shown == []
+        ctl._on_block(ForegroundWindow(hwnd=1, pid=1, exe_name="chrome.exe"))
+        assert len(shown) == 1 and "최소화" in shown[0]
+        ctl.session.ends_at = time.time() - 1
+        ctl._refresh_status()  # 타이머 끝 -> 종료 창은 뜨지만 트레이 알림은 없음
+        assert len(shown) == 1
+    finally:
+        if ctl._end_popup is not None:
+            ctl._end_popup.close()
+        _close(ctl)

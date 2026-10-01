@@ -8,7 +8,7 @@ from __future__ import annotations
 import time
 from typing import List, Optional
 
-from PySide6.QtCore import QByteArray, QSize, Qt, Signal
+from PySide6.QtCore import QByteArray, QEvent, QObject, QSize, Qt, Signal
 from PySide6.QtGui import QCloseEvent, QKeyEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -118,6 +118,30 @@ class ModeRow(QWidget):
         summary = _label(mode_summary(profile), "hint")
         summary.setStyleSheet("background: transparent;")
         col.addWidget(summary)
+
+
+class _LaunchCursorFilter(QObject):
+    """'지금 쓸 수 있는 앱' 목록에서 앱 위에 있을 때만 손가락 모양 커서, 빈 곳에서는 보통 화살표."""
+
+    def __init__(self, view: QListWidget) -> None:
+        super().__init__(view)
+        self.view = view
+        view.viewport().setMouseTracking(True)
+        view.viewport().installEventFilter(self)
+
+    def over_app(self, pos) -> bool:
+        item = self.view.itemAt(pos)
+        return item is not None and bool(item.data(Qt.ItemDataRole.UserRole))
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.MouseMove:
+            if self.over_app(event.position().toPoint()):
+                obj.setCursor(Qt.CursorShape.PointingHandCursor)
+            else:
+                obj.unsetCursor()
+        elif event.type() == QEvent.Type.Leave:
+            obj.unsetCursor()
+        return False
 
 
 class MainWindow(QMainWindow):
@@ -684,7 +708,7 @@ class MainWindow(QMainWindow):
         self.run_apps.setIconSize(QSize(20, 20))
         self.run_apps.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self.run_apps.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.run_apps.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+        self._run_apps_cursor = _LaunchCursorFilter(self.run_apps)
         self.run_apps.itemClicked.connect(self._on_run_app_clicked)
         cl.addWidget(self.run_apps, 1)
         cl.addWidget(_label("작업 표시줄, 시작 메뉴, 작업 관리자, Windows 설정은 항상 쓸 수 있습니다.", "hint", True))
@@ -711,6 +735,7 @@ class MainWindow(QMainWindow):
         self.edit_apps_btn = QPushButton("허용 앱 편집…")
         self.edit_apps_btn.setObjectName("linkButton")
         self.edit_apps_btn.setToolTip("해제 문자열을 입력하면 집중을 끝내지 않고 허용 앱 목록만 고칠 수 있습니다")
+        self.edit_apps_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.edit_apps_btn.clicked.connect(self.edit_apps_requested.emit)
         buttons.addWidget(self.edit_apps_btn)
         self.stop_btn = QPushButton("집중 끝내기…")

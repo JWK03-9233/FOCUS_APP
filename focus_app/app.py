@@ -37,7 +37,6 @@ class FocusApp:
         self.session: Optional[FocusSession] = None
         self.monitor: Optional[AllowlistMonitor] = None
         self._dialog_open = False
-        self._told_about_tray = False
 
         app_catalog.installed_apps.preload()  # 앱 고르기 창을 빨리 열 수 있게 미리 읽어 둠
 
@@ -96,14 +95,7 @@ class FocusApp:
         self.window.activateWindow()
 
     def _on_window_hidden(self) -> None:
-        if not self._told_about_tray:
-            self._told_about_tray = True
-            self.tray.showMessage(
-                APP_NAME,
-                "FocusApp은 작업 표시줄 오른쪽 트레이에서 계속 실행됩니다. 아이콘을 누르면 창이 다시 열립니다.",
-                QSystemTrayIcon.MessageIcon.Information,
-                4000,
-            )
+        """창을 닫아 트레이로 숨겼을 때. 알림은 앱을 막았을 때만 띄우므로 따로 안내하지 않음."""
 
     # ------------------------------------------------------------- 트레이 메뉴
     def _build_menu(self) -> None:
@@ -170,13 +162,6 @@ class FocusApp:
             log.info("허용 앱 실행: %s", exe)
             return
         log.warning("허용 앱을 열 수 없음: %s", exe)
-        name = self.settings.app_display_name(exe)
-        self.tray.showMessage(
-            APP_NAME,
-            f"{name}을(를) 열 수 없었어요. 시작 메뉴에서 직접 열어 주세요.",
-            QSystemTrayIcon.MessageIcon.Warning,
-            4000,
-        )
 
     def _on_tray_activated(self, reason) -> None:
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
@@ -256,14 +241,6 @@ class FocusApp:
         self.poll_timer.start(self.settings.poll_interval_ms)
         self.window.show_running(session, profile)
         self._refresh_status()
-        remaining = session.remaining_seconds()
-        left = "직접 끝낼 때까지" if remaining is None else f"{format_duration(remaining)} 동안"
-        self.tray.showMessage(
-            APP_NAME,
-            ("이전 집중을 이어갑니다. " if resumed else "집중을 시작했습니다. ") + f"{session.profile} · {left}",
-            QSystemTrayIcon.MessageIcon.Information,
-            4000,
-        )
 
     def stop_focus(self) -> None:
         if not self.active or self._dialog_open:
@@ -300,7 +277,6 @@ class FocusApp:
             # 집중 중에 최소화된 앱들은 그대로 둠 (한꺼번에 다시 열지 않음)
             self.show_window()
             self._show_end_popup(reason, session.profile, focused, blocked)
-        self.tray.showMessage(APP_NAME, f"{msg} {summary}", QSystemTrayIcon.MessageIcon.Information, 5000)
 
     def _show_end_popup(self, reason: str, mode_name: str, focused: int, blocked: int) -> None:
         if self._end_popup is not None:
@@ -418,18 +394,10 @@ class FocusApp:
         self._latest = info
         if info.newer:
             self.window.set_update_available(info.version)
-            # 중요도: critical이면 (집중 중이 아닐 때) 업데이트 창을 바로 띄우고,
-            # recommended이면 창이 보여도 알림, optional이면 창이 숨겨져 있을 때만 알림
+            # critical이면 (집중 중이 아닐 때) 업데이트 창을 바로 띄움. 그 외에는 창의 업데이트 버튼만 강조
+            # (알림은 앱을 막았을 때만 띄움)
             if info.urgency == "critical" and not self.active and not self._dialog_open:
                 QTimer.singleShot(0, self.open_update)
-                return
-            if info.urgency == "recommended" or not self.window.isVisible():
-                self.tray.showMessage(
-                    APP_NAME,
-                    f"새 버전 v{info.version}이(가) 있습니다. FocusApp 창에서 업데이트할 수 있습니다.",
-                    QSystemTrayIcon.MessageIcon.Information,
-                    5000,
-                )
 
     def open_update(self) -> None:
         if self._dialog_open:
