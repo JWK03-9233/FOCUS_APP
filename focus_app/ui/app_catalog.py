@@ -1,4 +1,8 @@
-"""허용 앱을 고를 때 보여줄 앱 목록 (실행 중인 앱 + 시작 메뉴에 설치된 앱)과 아이콘."""
+"""허용 앱을 고를 때 보여줄 앱 목록과 아이콘.
+
+설치된 앱은 Windows 설정의 '설치된 앱'과 같은 범위를 목표로 합니다:
+시작 메뉴 바로가기 + Microsoft Store 앱 + 설치 정보(레지스트리) + App Paths.
+"""
 
 from __future__ import annotations
 
@@ -25,8 +29,9 @@ _SKIP_WORDS = ("uninstall", "제거", "setup", "installer", "help", "readme", "�
 class AppEntry:
     exe: str  # 소문자 실행 파일 이름 (예: "chrome.exe")
     name: str  # 화면 표시 이름 (예: "Google Chrome")
-    path: str = ""  # 실행 파일 전체 경로 (아이콘 표시용)
+    path: str = ""  # 아이콘용 경로: 실행 파일, 또는 Store 앱의 로고 이미지(.png)
     running: bool = False
+    usable: bool = True  # False면 실행 파일을 못 찾아 목록에는 보이지만 고를 수 없음
 
 
 def running_apps() -> List[AppEntry]:
@@ -56,9 +61,6 @@ _SKIP_EXE_WORDS = (
     "server", "process", "agent", "dialog",
 )
 
-
-# 앱이 아닌 것: 런타임·드라이버 등 (설치 정보의 표시 이름 기준)
-_SKIP_NAME_WORDS = ("redistributable", "runtime", "driver", "sdk", "microsoft 365 -", "visual c++")
 # 설치 프로그램이 아이콘용으로 남겨 둔 복사본이 있는 폴더
 _SKIP_DIR_WORDS = ("\\windows\\installer\\", "\\package cache\\")
 
@@ -97,6 +99,9 @@ def _usable_exe(path: str) -> Optional[str]:
     return path
 
 
+_WEB_APP_PROXIES = ("chrome_proxy.exe", "msedge_proxy.exe", "brave_proxy.exe", "whale_proxy.exe")
+
+
 def _start_menu_apps() -> List[AppEntry]:
     out = []
     for base in _start_menu_dirs():
@@ -107,6 +112,9 @@ def _start_menu_apps() -> List[AppEntry]:
             try:
                 target = QFileInfo(str(lnk)).symLinkTarget()
             except Exception:  # noqa: BLE001 - 깨진 바로가기는 건너뜀
+                continue
+            # 브라우저가 만든 웹 앱 바로가기는 모두 같은 공용 실행 파일(chrome_proxy 등)을 가리켜 앱으로 구분할 수 없음
+            if normalize_exe(target) in _WEB_APP_PROXIES:
                 continue
             # 앱을 지워도 시작 메뉴 바로가기가 남는 경우가 많음 -> 실제 exe가 있을 때만
             path = _usable_exe(target)
@@ -121,12 +129,62 @@ _UNINSTALL_KEYS = [
     ("HKEY_LOCAL_MACHINE", r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
 ]
 _APP_PATHS_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths"
+_UPDATE_RELEASE_TYPES = ("update", "hotfix", "security update", "service pack")
+
+
+def unusable_key(name: str) -> str:
+    """실행 파일을 못 찾은 앱을 목록에서 구분할 때 쓰는 이름 (숨기기 저장용)."""
+    return "?" + "".join("_" if c in "\\/" else c for c in name.strip().lower())
+
+
+def _clean_path(value: str) -> str:
+    """레지스트리 값(따옴표, '경로,아이콘번호', 환경 변수)을 실제 파일 경로로."""
+    path = os.path.expandvars((value or "").strip().strip('"'))
+    if "," in path and not os.path.exists(path):
+        path = path.rsplit(",", 1)[0].strip().strip('"')
+    return path.replace("/", "\\")
+
+
+def _similarity(a: str, b: str) -> int:
+    """표시 이름과 실행 파일 이름이 얼마나 닮았는지 (클수록 닮음)."""
+    norm = lambda s: "".join(ch for ch in s.lower() if ch.isalnum())  # noqa: E731
+    a, b = norm(a), norm(b)
+    if not a or not b:
+        return 0
+    if a == b:
+        return 100
+    if a in b or b in a:
+        return 60 + min(len(a), len(b))
+    return sum(1 for ch in set(a) if ch in b)
+
+
+def _best_exe_in(folder: str, name: str) -> Optional[str]:
+    """설치 폴더에서 이 앱의 실행 파일로 가장 그럴듯한 것 (바로 아래, 없으면 한 단계 아래 폴더까지)."""
+    if not folder or not os.path.isdir(folder):
+        return None
+    root = Path(folder)
+    for pattern in ("*.exe", "*/*.exe"):
+        try:
+            found = [p for p in (_usable_exe(str(f)) for f in root.glob(pattern)) if p and is_gui_exe(p)]
+        except OSError:
+            found = []
+        if found:
+            def score(p: str):
+                try:
+                    size = os.path.getsize(p)
+                except OSError:
+                    size = 0
+                return (_similarity(name, Path(p).stem), size)
+
+            return max(found, key=score)
+    return None
 
 
 def _registry_apps() -> List[AppEntry]:
-    """Windows '설치된 앱' 목록(제거 정보)과 App Paths에서 찾기.
+    """Windows 설정의 '설치된 앱'에 나오는 일반(Win32) 프로그램 전부 + App Paths.
 
-    시작 메뉴 바로가기를 만들지 않는 앱(예: 사용자 폴더에 설치한 SumatraPDF)도 여기에는 등록됩니다.
+    실행 파일은 DisplayIcon → 설치 폴더 → 제거 프로그램 폴더 순으로 찾고, 끝내 못 찾으면
+    목록에는 보이되 고를 수 없는 항목(usable=False)으로 넣습니다.
     """
     if not sys.platform.startswith("win"):
         return []
@@ -152,20 +210,35 @@ def _registry_apps() -> List[AppEntry]:
                     continue
                 with sub:
                     name = value(sub, "DisplayName").strip()
-                    # 숨은 구성 요소·업데이트 항목은 제외
+                    # Windows 설정에도 안 나오는 숨은 구성 요소·업데이트 항목만 제외
                     if not name or value(sub, "SystemComponent") == "1" or value(sub, "ParentKeyName"):
                         continue
-                    if any(w in name.lower() for w in _SKIP_WORDS + _SKIP_NAME_WORDS):
+                    if value(sub, "ReleaseType").lower() in _UPDATE_RELEASE_TYPES:
                         continue
-                    exe_path = _usable_exe(value(sub, "DisplayIcon"))
+                    icon = _clean_path(value(sub, "DisplayIcon"))
+                    exe_path = _usable_exe(icon) if icon.lower().endswith(".exe") else None
+                    if exe_path and not is_gui_exe(exe_path):
+                        exe_path = None
                     if not exe_path:
-                        # 아이콘 정보가 없으면 설치 폴더 바로 아래의 실행 파일이 하나뿐일 때만 사용
-                        loc = value(sub, "InstallLocation").strip().strip('"')
-                        if loc and os.path.isdir(loc):
-                            exes = [p for p in (_usable_exe(str(f)) for f in Path(loc).glob("*.exe")) if p]
-                            exe_path = exes[0] if len(exes) == 1 else None
-                    if exe_path and is_gui_exe(exe_path):
+                        folders = [_clean_path(value(sub, "InstallLocation"))]
+                        if icon:
+                            folders.append(str(Path(icon).parent))
+                        uninst = _clean_path(value(sub, "UninstallString").split(" /")[0].split(" -")[0])
+                        if uninst.lower().endswith(".exe"):
+                            folders.append(str(Path(uninst).parent))
+                        for folder in folders:
+                            low = folder.lower()
+                            if not folder or any(w in low + "\\" for w in _SKIP_DIR_WORDS) or low.rstrip("\\").endswith(
+                                ("\\windows", "\\system32", "\\syswow64")
+                            ):
+                                continue
+                            exe_path = _best_exe_in(folder, name)
+                            if exe_path:
+                                break
+                    if exe_path:
                         out.append(AppEntry(exe=normalize_exe(exe_path), name=name, path=exe_path))
+                    else:
+                        out.append(AppEntry(exe=unusable_key(name), name=name, usable=False))
 
     windir = os.environ.get("WINDIR", r"C:\Windows").lower()
     for hive_name in ("HKEY_CURRENT_USER", "HKEY_LOCAL_MACHINE"):
@@ -188,26 +261,113 @@ def _registry_apps() -> List[AppEntry]:
                 if exe.startswith("mso") or "common files" in low or "windows mail" in low:
                     continue
                 # Windows 폴더의 도구는 잘 알려진 앱(메모장·그림판 등)만
-                if exe_path.lower().startswith(windir) and exe not in KNOWN_APP_NAMES:
+                if low.startswith(windir) and exe not in KNOWN_APP_NAMES:
                     continue
                 out.append(AppEntry(exe=exe, name=friendly_name(exe_path), path=exe_path))
     return out
 
 
-def scan_installed_apps() -> List[AppEntry]:
-    """설치된 앱 목록: 시작 메뉴 바로가기 + Windows 설치 정보(레지스트리). 수 초 걸릴 수 있습니다.
+# Microsoft Store(MSIX) 앱: 시작 메뉴에 보이는 앱마다 패키지 매니페스트에서 실제 실행 파일을 찾음
+_STORE_SCRIPT = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$pk = @{}
+Get-AppxPackage | ForEach-Object { $pk[$_.PackageFamilyName] = $_ }
+$out = foreach ($s in Get-StartApps) {
+  if ($s.AppID -notmatch '!') { continue }
+  $parts = $s.AppID.Split('!', 2)
+  $p = $pk[$parts[0]]
+  if (-not $p) { continue }
+  try { [xml]$m = Get-Content -LiteralPath (Join-Path $p.InstallLocation 'AppxManifest.xml') -Raw -Encoding UTF8 } catch { continue }
+  $app = @($m.Package.Applications.Application) | Where-Object { $_.Id -eq $parts[1] } | Select-Object -First 1
+  if (-not $app -or -not $app.Executable) { continue }
+  [pscustomobject]@{ name = $s.Name; exe = [string]$app.Executable; dir = $p.InstallLocation;
+                     logo = [string]$app.VisualElements.Square44x44Logo }
+}
+@($out) | ConvertTo-Json -Compress
+"""
 
-    같은 앱은 시작 메뉴 이름을 우선합니다 (보통 더 읽기 쉬움).
+
+def _store_logo(package_dir: str, logo: str) -> str:
+    """매니페스트의 로고 경로(Assets\\X.png)를 실제 파일로. 실제로는 X.targetsize-48.png 같은 이름으로 있음."""
+    if not logo:
+        return ""
+    target = Path(package_dir) / logo
+    if target.is_file():
+        return str(target)
+    try:
+        files = [f for f in target.parent.glob(target.stem + "*.png") if "contrast" not in f.name.lower()]
+    except OSError:
+        return ""
+    if not files:
+        return ""
+
+    def rank(f: Path) -> tuple:
+        n = f.name.lower()
+        plain = "altform" not in n
+        return (
+            plain and "targetsize-48" in n,
+            plain and "scale-200" in n,
+            plain and "scale-100" in n,
+            plain,
+            -len(n),
+        )
+
+    return str(max(files, key=rank))
+
+
+def _store_apps() -> List[AppEntry]:
+    if not sys.platform.startswith("win"):
+        return []
+    import base64
+    import json
+    import subprocess
+
+    encoded = base64.b64encode(_STORE_SCRIPT.encode("utf-16-le")).decode("ascii")
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+        capture_output=True,
+        timeout=90,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    try:
+        data = json.loads(r.stdout.decode("utf-8-sig", errors="replace") or "[]")
+    except ValueError:
+        return []
+    if isinstance(data, dict):
+        data = [data]
+    out: List[AppEntry] = []
+    for d in data:
+        exe = normalize_exe(str(d.get("exe", "")))
+        name = str(d.get("name", "")).strip()
+        if not exe.endswith(".exe") or not name or exe in SYSTEM_EXES:
+            continue
+        icon = _store_logo(str(d.get("dir", "")), str(d.get("logo", "")))
+        out.append(AppEntry(exe=exe, name=name, path=icon or str(Path(str(d.get("dir", ""))) / str(d.get("exe", "")))))
+    return out
+
+
+def scan_installed_apps() -> List[AppEntry]:
+    """설치된 앱 목록 = Windows 설정의 '설치된 앱'과 같은 범위.
+
+    시작 메뉴 바로가기 + Microsoft Store 앱 + 설치 정보(레지스트리) + App Paths. 수 초 걸릴 수 있습니다.
+    같은 실행 파일은 앞의 출처 이름을 씁니다. 실행 파일을 못 찾은 항목은 맨 뒤에 (고를 수 없음).
     """
     result: Dict[str, AppEntry] = {}
-    for source in (_start_menu_apps, _registry_apps):
+    unusable: Dict[str, AppEntry] = {}
+    for source in (_start_menu_apps, _store_apps, _registry_apps):
         try:
             entries = source()
         except Exception:  # noqa: BLE001 - 한 출처가 실패해도 나머지는 보여 줌
             continue
         for e in entries:
-            result.setdefault(e.exe, e)
-    return sorted(result.values(), key=lambda e: e.name.lower())
+            if e.usable:
+                result.setdefault(e.exe, e)
+            else:
+                unusable.setdefault(e.exe, e)
+    usable_names = {e.name.strip().lower() for e in result.values()}
+    rest = [e for e in unusable.values() if e.name.strip().lower() not in usable_names]
+    return sorted(result.values(), key=lambda e: e.name.lower()) + sorted(rest, key=lambda e: e.name.lower())
 
 
 class InstalledAppsCache:
@@ -289,7 +449,9 @@ def app_icon(path: str, name: str = "") -> QIcon:
         _icon_provider = QFileIconProvider()
     key = (path or "?" + name).lower()
     if key not in _icon_cache:
-        if path and os.path.exists(path):
+        if path and path.lower().endswith(".png") and os.path.exists(path):
+            _icon_cache[key] = QIcon(path)  # Store 앱 로고
+        elif path and os.path.exists(path):
             _icon_cache[key] = _icon_provider.icon(QFileInfo(path))
         else:
             _icon_cache[key] = letter_icon(name or Path(path).stem or "?")

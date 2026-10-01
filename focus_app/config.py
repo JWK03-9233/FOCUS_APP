@@ -167,6 +167,7 @@ class Settings:
     check_updates_on_start: bool = True  # 실행할 때 새 버전이 있는지 확인
     github_token: str = ""  # 비공개 저장소에서 업데이트를 받을 때만 필요 (읽기 권한 토큰)
     favorite_apps: List[str] = field(default_factory=list)  # 앱 고르기 창 맨 위에 보일 즐겨찾기 (실행 파일 이름)
+    hidden_apps: List[str] = field(default_factory=list)  # 앱 고르기 창 맨 아래 '숨긴 앱'으로 보낸 앱
     require_unlock_for_quit: bool = True
     require_unlock_for_profile_switch: bool = True
     emergency_delay_minutes: int = 10  # 비상 해제가 실제로 적용되기까지의 지연
@@ -282,7 +283,7 @@ class Settings:
                 if isinstance(info, dict):
                     settings.remember_app(str(exe), str(info.get("name", "")), str(info.get("path", "")))
         for f in fields(cls):
-            if f.name in ("profiles", "app_info", "duration_presets", "favorite_apps") or f.name not in raw:
+            if f.name in ("profiles", "app_info", "duration_presets", "favorite_apps", "hidden_apps") or f.name not in raw:
                 continue
             value = raw[f.name]
             current = getattr(settings, f.name)
@@ -302,9 +303,13 @@ class Settings:
         settings.default_duration_minutes = max(0, min(1440, settings.default_duration_minutes))
         settings.custom_duration_minutes = max(1, min(1440, settings.custom_duration_minutes))
         settings.duration_presets = clean_presets(raw.get("duration_presets", DEFAULT_DURATION_PRESETS))
-        fav_raw = raw.get("favorite_apps")
-        if isinstance(fav_raw, list):
-            settings.favorite_apps = list(dict.fromkeys(normalize_exe(str(f)) for f in fav_raw if normalize_exe(str(f))))
+        for key in ("favorite_apps", "hidden_apps"):
+            values = raw.get(key)
+            if isinstance(values, list):
+                cleaned = list(dict.fromkeys(normalize_exe(str(v)) for v in values if normalize_exe(str(v))))
+                setattr(settings, key, cleaned)
+        # 즐겨찾기와 숨김은 동시에 될 수 없음 (즐겨찾기 우선)
+        settings.hidden_apps = [h for h in settings.hidden_apps if h not in settings.favorite_apps]
         if settings.get_profile(settings.active_profile) is None:
             settings.active_profile = settings.profiles[0].name
         return settings

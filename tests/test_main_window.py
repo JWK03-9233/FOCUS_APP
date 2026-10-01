@@ -515,3 +515,102 @@ def test_favorite_apps_saved_in_settings(qapp):
     s2, w = make_window(qapp)
     w._save_favorite_apps(["zoom.exe"])
     assert s2.favorite_apps == ["zoom.exe"]
+
+
+def _click_hide(dlg, exe):
+    from PySide6.QtTest import QTest
+
+    from focus_app.ui.app_picker import hide_rect
+
+    item = _item(dlg, exe)
+    dlg.list.scrollToItem(item)
+    QTest.mouseClick(dlg.list.viewport(), Qt.MouseButton.LeftButton, pos=hide_rect(dlg.list.visualItemRect(item)).center())
+
+
+def _header(dlg, key):
+    return next(dlg.list.item(i) for i in range(dlg.list.count()) if dlg.list.item(i).data(Qt.ItemDataRole.UserRole + 1) == key)
+
+
+def test_hide_and_favorite_together(qapp):
+    favs, hid = [], []
+    running = [AppEntry("chrome.exe", "Chrome", "", True), AppEntry("code.exe", "VS Code", "", True)]
+    dlg = AppPickerDialog("공부용", [], running=running, on_favorites_changed=favs.append, on_hidden_changed=hid.append)
+    dlg.show()
+    _item(dlg, "chrome.exe").setCheckState(Qt.CheckState.Checked)
+    _click_hide(dlg, "chrome.exe")  # 숨기기
+    assert hid[-1] == ["chrome.exe"]
+    keys = _keys(dlg)
+    assert keys[-2:] == ["hidden", "chrome.exe"]  # 맨 아래 숨긴 앱 구역
+    assert _item(dlg, "chrome.exe").isHidden()  # 기본은 접힘
+    assert _item(dlg, "chrome.exe").checkState() == Qt.CheckState.Checked  # 숨겨도 체크는 그대로
+    dlg._on_item_clicked(_header(dlg, "hidden"))  # 펼침
+    assert not _item(dlg, "chrome.exe").isHidden()
+
+    _click_star(dlg, "code.exe")  # 즐겨찾기
+    assert _keys(dlg)[:2] == ["favorites", "code.exe"]
+    _click_hide(dlg, "code.exe")  # 즐겨찾기를 숨기면 즐겨찾기에서 빠짐
+    assert favs[-1] == [] and hid[-1] == ["chrome.exe", "code.exe"]
+    _click_star(dlg, "chrome.exe")  # 숨긴 앱을 즐겨찾기하면 숨김에서 나옴
+    assert favs[-1] == ["chrome.exe"] and hid[-1] == ["code.exe"]
+    _click_hide(dlg, "code.exe")  # 숨김 해제
+    assert hid[-1] == [] and "hidden" not in _keys(dlg)
+
+    dlg2 = AppPickerDialog("공부용", [], running=running, favorites=["chrome.exe"], hidden=["code.exe"])
+    keys = _keys(dlg2)
+    assert keys[:2] == ["favorites", "chrome.exe"] and keys[-2:] == ["hidden", "code.exe"]  # 다음에 열어도 유지
+
+
+def test_unusable_installed_entries_are_listed_but_not_selectable(qapp):
+    from focus_app.ui.app_catalog import unusable_key
+
+    hid = []
+    key = unusable_key("Python 3.13.7 (64-bit)")
+    app_catalog.installed_apps.set([AppEntry("hwp.exe", "한글", ""), AppEntry(key, "Python 3.13.7 (64-bit)", usable=False)])
+    dlg = AppPickerDialog("공부용", [], running=[], on_hidden_changed=hid.append)
+    dlg.show()
+    item = _item(dlg, key)
+    assert "실행 파일 없음" in item.text()
+    assert not (item.flags() & Qt.ItemFlag.ItemIsEnabled)
+    dlg._on_item_clicked(item)
+    assert dlg.selected_exes() == []
+    _click_star(dlg, key)  # 별은 없음 (실행 파일이 없으니 즐겨찾기 의미 없음)
+    assert "favorites" not in _keys(dlg)
+    _click_hide(dlg, key)  # 숨기기는 가능
+    assert hid[-1] == [key]
+
+
+def test_hidden_and_favorites_saved_in_settings(qapp):
+    s = Settings()
+    s.favorite_apps = ["a.exe"]
+    s.hidden_apps = ["B.EXE", "a.exe", "?python 3"]
+    s.save()
+    loaded = Settings.load()
+    assert loaded.favorite_apps == ["a.exe"]
+    assert loaded.hidden_apps == ["b.exe", "?python 3"]  # 즐겨찾기와 겹치면 즐겨찾기 우선
+    s2, w = make_window(qapp)
+    w._save_hidden_apps(["zoom.exe"])
+    assert s2.hidden_apps == ["zoom.exe"]
+
+
+def test_best_exe_in_install_folder_and_store_logo(tmp_path):
+    from pathlib import Path
+    import shutil
+    import sys as _sys
+
+    from focus_app.ui import app_catalog as cat
+
+    if not _sys.platform.startswith("win"):
+        return
+    gui = r"C:\Windows\notepad.exe"
+    app = tmp_path / "Millie"
+    (app / "bin").mkdir(parents=True)
+    shutil.copy(gui, app / "bin" / "millie-desktop.exe")  # 한 단계 아래 폴더
+    shutil.copy(gui, app / "bin" / "other.exe")
+    shutil.copy(gui, app / "bin" / "unins000.exe")  # 제거 프로그램은 후보에서 제외
+    assert Path(cat._best_exe_in(str(app), "Millie Desktop")).name == "millie-desktop.exe"
+
+    assets = tmp_path / "pkg" / "Assets"
+    assets.mkdir(parents=True)
+    for n in ("Logo.scale-100.png", "Logo.targetsize-48.png", "Logo.targetsize-48_contrast-black.png"):
+        (assets / n).write_bytes(b"png")
+    assert Path(cat._store_logo(str(tmp_path / "pkg"), "Assets\Logo.png")).name == "Logo.targetsize-48.png"

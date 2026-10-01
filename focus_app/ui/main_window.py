@@ -468,6 +468,8 @@ class MainWindow(QMainWindow):
             parent=self,
             favorites=self.settings.favorite_apps,
             on_favorites_changed=self._save_favorite_apps,
+            hidden=self.settings.hidden_apps,
+            on_hidden_changed=self._save_hidden_apps,
             app_names=self.settings.app_display_name,
             app_paths=self._app_path,
         )
@@ -481,6 +483,10 @@ class MainWindow(QMainWindow):
 
     def _save_favorite_apps(self, favorites: List[str]) -> None:
         self.settings.favorite_apps = list(favorites)
+        self.settings_changed.emit()
+
+    def _save_hidden_apps(self, hidden: List[str]) -> None:
+        self.settings.hidden_apps = list(hidden)
         self.settings_changed.emit()
 
     def add_entries(self, profile: Profile, entries: List[app_catalog.AppEntry]) -> None:
