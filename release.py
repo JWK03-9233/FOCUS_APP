@@ -246,7 +246,7 @@ def changelog_section(version):
 
 def ensure_changelog_section(version):
     path = os.path.join(ROOT, CHANGELOG_FILE)
-    body = open(path, encoding="utf-8").read() if os.path.exists(path) else "# 변경 기록\n"
+    body = open(path, encoding="utf-8", newline="").read() if os.path.exists(path) else "# 변경 기록\n"
     if changelog_section(version) is not None:
         return
     head, _, rest = body.partition("\n## ")
@@ -255,7 +255,7 @@ def ensure_changelog_section(version):
     if DRY_RUN:
         dry(f"{CHANGELOG_FILE}에 [{version}] 절 추가")
         return
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         f.write(new)
     say(f"OK  {CHANGELOG_FILE}에 [{version}] 절 추가 (내용을 채워 주세요)")
 
@@ -264,7 +264,7 @@ def ensure_changelog_section(version):
 
 def _rewrite(rel_path, pattern, replacement, label):
     path = os.path.join(ROOT, rel_path)
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8", newline="") as f:  # 줄바꿈(LF/CRLF)을 원래대로 유지
         content = f.read()
     new_content, n = re.subn(pattern, replacement, content, count=1, flags=re.M)
     if n == 0:
@@ -273,7 +273,7 @@ def _rewrite(rel_path, pattern, replacement, label):
     if DRY_RUN:
         dry(f"{rel_path}: {label}")
         return True
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         f.write(new_content)
     say(f"OK  {rel_path}: {label}")
     return True
