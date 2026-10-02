@@ -838,12 +838,12 @@ def test_launch_app_brings_existing_window_instead_of_opening_new(monkeypatch):
     monkeypatch.setattr(app_catalog.sys, "platform", "win32")
 
     # 창이 있으면 (뒤에 있거나 최소화) 그 창을 앞으로, 새로 열지 않음
-    monkeypatch.setattr(winapi, "find_app_window", lambda exe: 77 if exe == "notepad.exe" else 0)
+    monkeypatch.setattr(winapi, "find_app_window", lambda exe, match=None: 77 if exe == "notepad.exe" else 0)
     assert app_catalog.launch_app("Notepad.exe")
     assert fronted == [77] and started == []
 
     # 창이 없으면 (꺼져 있거나 트레이에만 있음) 실행
-    monkeypatch.setattr(winapi, "find_app_window", lambda exe: 0)
+    monkeypatch.setattr(winapi, "find_app_window", lambda exe, match=None: 0)
     assert app_catalog.launch_app("notepad.exe")
     assert fronted == [77] and started == ["C:\apps\notepad.exe"]
 
@@ -872,3 +872,119 @@ def test_open_apps_get_a_dot_and_tooltip(qapp):
     hwp = next(w.run_apps.item(i) for i in range(2) if w.run_apps.item(i).data(Qt.ItemDataRole.UserRole) == "hwp.exe")
     assert hwp.data(OPEN_ROLE)
     w.grab()  # 점 그리기에서 오류가 나지 않는지
+
+
+def test_running_page_shows_every_allowed_app_without_scrolling(qapp):
+    s, w = make_window(qapp)
+    p = s.current_profile()
+    p.block_everything = True
+    p.allowed_apps = [f"app{i}.exe" for i in range(14)]
+    w.resize(700, 900)
+    w.show()
+    w.show_running(FocusSession.start(p.name, 30), p)
+    qapp.processEvents()
+    vp = w.run_apps.viewport()
+    rects = [w.run_apps.visualItemRect(w.run_apps.item(i)) for i in range(w.run_apps.count())]
+    assert len({r.top() for r in rects}) > 1  # 여러 줄로 감김
+    assert all(vp.rect().contains(r) for r in rects)  # 잘리거나 스크롤해야 보이는 앱 없음
+    w.hide()
+
+
+def test_setup_warns_when_site_mode_has_no_helper(qapp):
+    s, w = make_window(qapp)
+    p = w.current_mode()
+    p.block_everything = True
+    p.allowed_apps = ["chrome.exe"]
+    p.restrict_sites = True
+    p.allowed_sites = ["notion.so"]
+    w._show_mode()
+    assert w.helper_banner.isHidden()  # 설치 여부를 아직 모르면 띄우지 않음
+    w.set_helper_installed(False)
+    assert not w.helper_banner.isHidden()
+    p.restrict_sites = False
+    w._update_start_summary()
+    assert w.helper_banner.isHidden()  # 사이트 제한을 안 쓰는 모드면 필요 없음
+    p.restrict_sites = True
+    w.set_helper_installed(True)
+    assert w.helper_banner.isHidden()
+
+
+def test_short_window_scrolls_instead_of_overlapping(qapp):
+    """창이 내용보다 낮으면 목록을 겹치게 줄이지 않고 창 전체를 스크롤."""
+    s, w = make_window(qapp)
+    p = s.current_profile()
+    p.block_everything = True
+    p.allowed_apps = [f"app{i}.exe" for i in range(30)]
+    p.allowed_sites = ["notion.so"]
+    p.restrict_sites = True
+    w.show()
+    w.show_running(FocusSession.start(p.name, 30), p)
+    w.setMinimumSize(0, 0)
+    w.resize(700, 300)
+    qapp.processEvents()
+    apps_bottom = w.run_apps.mapTo(w.running_page, w.run_apps.rect().bottomLeft()).y()
+    sites_top = w.run_sites_title.mapTo(w.running_page, w.run_sites_title.rect().topLeft()).y()
+    assert sites_top > apps_bottom  # 사이트 제목이 앱 목록 위에 겹치지 않음
+    assert w.centralWidget().verticalScrollBar().maximum() > 0  # 대신 창이 스크롤됨
+    w.hide()
+
+
+def test_windows_never_scroll_sideways_and_wrap_text(qapp):
+    """창 전체는 가로로 스크롤하지 않고, 긴 글자는 줄을 바꿔 맞춤."""
+    from PySide6.QtWidgets import QLabel
+
+    s, w = make_window(qapp)
+    w.show()
+    w.setMinimumSize(300, 300)  # 코드에서 정한 최소 크기가 내용보다 작아도
+    w.resize(300, 400)
+    qapp.processEvents()
+    w.resize(300, 400)
+    qapp.processEvents()
+    scroll = w.centralWidget()
+    assert scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert scroll.widget().width() <= scroll.viewport().width()  # 내용이 창 밖으로 잘리지 않음
+    assert all(label.wordWrap() for label in scroll.widget().findChildren(QLabel))
+    w.hide()
+
+
+def test_app_list_is_fully_expanded_and_rows_not_clipped(qapp):
+    """모드의 앱 목록은 안쪽 스크롤 없이 모두 펼치고, 줄 높이는 줄 위젯이 필요한 만큼 (글자 아래가 잘리지 않음)."""
+    s, w = make_window(qapp)
+    p = w.current_mode()
+    p.block_everything = True
+    p.allowed_apps = [f"app{i}.exe" for i in range(20)]
+    w._show_mode()
+    w.show()
+    qapp.processEvents()
+    lst = w.app_list
+    assert lst.count() == 20
+    assert lst.verticalScrollBar().maximum() == 0  # 안쪽 스크롤 없음
+    last = lst.visualItemRect(lst.item(lst.count() - 1))
+    assert lst.viewport().rect().contains(last)  # 마지막 줄까지 보임
+    for i in range(lst.count()):
+        row = lst.itemWidget(lst.item(i))
+        assert lst.item(i).sizeHint().height() >= row.sizeHint().height()
+    w.hide()
+
+
+def test_app_row_labels_get_their_full_height(qapp):
+    """줄 위젯이 칸 여백 때문에 눌려 글자 아래(g 꼬리 등)가 잘리지 않음."""
+    from PySide6.QtWidgets import QLabel
+
+    from focus_app.ui import theme
+
+    qapp.setStyleSheet(theme.STYLESHEET)
+    try:
+        s, w = make_window(qapp)
+        p = w.current_mode()
+        p.block_everything = True
+        p.allowed_apps = ["gemini.exe", "typora.exe"]
+        w._show_mode()
+        w.show()
+        qapp.processEvents()
+        row = w.app_list.itemWidget(w.app_list.item(0))
+        for label in row.findChildren(QLabel)[1:]:  # 이름, 실행 파일 이름
+            assert label.height() >= label.sizeHint().height()
+        w.hide()
+    finally:
+        qapp.setStyleSheet("")

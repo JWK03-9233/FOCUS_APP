@@ -129,6 +129,8 @@ class WindowStateManager(QObject):
                     item.setData(_BASE_HEIGHT_ROLE, base)
                 item.setSizeHint(QSize(hint.width(), round(base * self.factor)))
             view.doItemsLayout()
+            if hasattr(view, "fit_height"):
+                view.fit_height()  # 펼쳐 보이는 목록(ExpandedList)은 높이도 다시 맞춤
         self._last_factor = self.factor
 
     # 창마다 100% 기준 크기를 기억해 두고 (사용자가 직접 바꿀 때만 갱신) 거기에 배율을 곱함.
@@ -246,7 +248,9 @@ class WindowStateManager(QObject):
                 restored = widget.restoreGeometry(QByteArray.fromBase64(value.encode("ascii")))
             except (ValueError, UnicodeEncodeError):
                 restored = False
-        if not value and not restored and f != 1:
+        if restored:
+            self._fit(widget, widget.width(), widget.height())  # 저장된 크기가 지금 화면보다 크면 줄임
+        elif not value and f != 1:
             self._fit(widget, round(size.width() * f), round(size.height() * f))  # 처음 여는 창
         self._remember_base_size(widget)
 

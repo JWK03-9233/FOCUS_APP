@@ -8,14 +8,13 @@ from __future__ import annotations
 import re
 from typing import List, Optional
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
@@ -24,7 +23,8 @@ from PySide6.QtWidgets import (
 
 from focus_app import browser_policy
 from focus_app.config import normalize_site
-from focus_app.ui import icons, theme
+from focus_app.ui import icons
+from focus_app.ui.scroll import ExpandedList
 
 SUPPORTED_NAMES = "·".join(b.name for b in browser_policy.BROWSERS)
 
@@ -88,10 +88,9 @@ class SiteEditor(QWidget):
         head.addWidget(self.add_btn)
         layout.addLayout(head)
 
-        self.list = QListWidget()
+        self.list = ExpandedList()  # 안쪽 스크롤 없이 모두 펼침
         self.list.setObjectName("appList")
         self.list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
-        self.list.setMinimumHeight(theme.px(76))
         layout.addWidget(self.list, 1)
         self.empty = QLabel("")
         self.empty.setObjectName("muted")
@@ -115,16 +114,13 @@ class SiteEditor(QWidget):
         """경고 문구에 쓰는 정보: 모드의 허용 앱, 관리자 권한 도우미가 설치돼 있는지 (모르면 None)."""
         self._apps = list(apps)
         self._helper_installed = helper_installed
-        self._update_warning()
+        self._reload()  # 안내 문구가 허용 앱(브라우저가 있는지)에 따라 달라짐
 
     # ------------------------------------------------------------- 화면
     def _reload(self) -> None:
         self.list.clear()
         for site in self.sites:
-            item = QListWidgetItem()
-            item.setSizeHint(QSize(0, theme.px(36)))
-            self.list.addItem(item)
-            self.list.setItemWidget(item, SiteRow(site, self.remove_site))
+            self.list.add_row(SiteRow(site, self.remove_site), 36)
         self.list.setVisible(bool(self.sites))
         self.list.setEnabled(self.restrict)
         self.add_btn.setEnabled(self.restrict)
@@ -138,8 +134,10 @@ class SiteEditor(QWidget):
                 "고른 사이트가 없어 브라우저에서 아무 사이트도 열 수 없습니다 (내 PC의 PDF 같은 파일은 열림)."
             )
         else:
+            browser = any(a in browser_policy.SUPPORTED_EXES for a in self._apps)
             self.empty.setText(
-                "다른 주소로 넘어가는 사이트(예: 로그인 페이지)는 그 주소도 추가하세요. "
+                ("" if browser else f"브라우저를 허용 앱에 넣지 않아도 {SUPPORTED_NAMES}에서 이 사이트들만 열 수 있습니다. ")
+                + "다른 주소로 넘어가는 사이트(예: 로그인 페이지)는 그 주소도 추가하세요. "
                 "집중을 시작할 때 열려 있던 브라우저는 다시 시작해야 적용됩니다."
             )
         self._update_warning()
@@ -147,8 +145,6 @@ class SiteEditor(QWidget):
     def _update_warning(self) -> None:
         lines = []
         if self.restrict:
-            if not any(a in browser_policy.SUPPORTED_EXES for a in self._apps):
-                lines.append(f"⚠ 허용 앱에 {SUPPORTED_NAMES} 중 하나가 없어 사이트를 열 수 없습니다.")
             others = [browser_policy.OTHER_BROWSERS[a] for a in self._apps if a in browser_policy.OTHER_BROWSERS]
             if others:
                 lines.append(f"⚠ {', '.join(others)}에는 사이트 제한이 적용되지 않아 모든 사이트가 열립니다.")

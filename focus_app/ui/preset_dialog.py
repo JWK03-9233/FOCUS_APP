@@ -13,12 +13,12 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QSpinBox,
-    QVBoxLayout,
     QWidget,
 )
 
 from focus_app.config import DEFAULT_DURATION_PRESETS, MAX_DURATION_PRESETS, clean_presets
 from focus_app.session import format_minutes
+from focus_app.ui.scroll import scroll_layout
 
 
 class PresetDialog(QDialog):
@@ -28,7 +28,7 @@ class PresetDialog(QDialog):
         self.setMinimumWidth(380)
         self._presets = clean_presets(list(presets))
 
-        layout = QVBoxLayout(self)
+        layout = scroll_layout(self)  # 내용이 많으면 창 전체를 스크롤
         layout.setSpacing(10)
         title = QLabel("자주 쓰는 집중 시간을 버튼으로 만들어 두세요.")
         title.setObjectName("sectionTitle")

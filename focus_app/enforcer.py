@@ -77,6 +77,7 @@ class ForegroundWindow:
     exe_name: str
     class_name: str = ""
     title: str = ""
+    app_id: str = ""  # 작업 표시줄 ID (브라우저에 설치한 웹 앱 창을 가리는 데 씀)
 
 
 def is_system_window(exe_name: str, class_name: str = "") -> bool:
@@ -99,7 +100,7 @@ def decide(window: Optional[ForegroundWindow], profile: Profile, own_pid: int) -
         return Decision.IGNORE
     if is_system_window(window.exe_name, window.class_name):
         return Decision.ALLOW
-    if profile.allows(window.exe_name):
+    if profile.allows_window(window.exe_name, window.app_id):
         return Decision.ALLOW
     return Decision.BLOCK
 

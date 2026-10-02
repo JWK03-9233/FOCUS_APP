@@ -12,12 +12,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSpinBox,
-    QVBoxLayout,
     QWidget,
 )
 
 from focus_app import unlock
 from focus_app.config import Settings
+from focus_app.ui.scroll import scroll_layout
 
 
 def _field_label(text: str) -> QLabel:
@@ -41,8 +41,8 @@ class PreferencesDialog(QDialog):
         self.setWindowTitle("설정")
         self.setMinimumWidth(480)
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(14)
+        layout = scroll_layout(self)  # 내용이 많으면 창 전체를 스크롤 (저장·취소 버튼 포함)
+        layout.setSpacing(12)
 
         title = QLabel("끄기 어렵게 만드는 장치")
         title.setObjectName("sectionTitle")

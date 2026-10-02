@@ -25,36 +25,36 @@ SOFT_HOVER = "rgba(127, 127, 127, 0.24)"
 SOFT_PRESSED = "rgba(127, 127, 127, 0.32)"
 LINE = "rgba(127, 127, 127, 0.32)"
 
-R_CONTROL = 10  # 버튼·입력칸
-R_CARD = 14  # 카드·목록 틀
+R_CONTROL = 9  # 버튼·입력칸
+R_CARD = 12  # 카드·목록 틀
 
 # QSS의 url()은 슬래시 경로를 씀. exe 배포본에서도 focus_app/assets가 함께 들어감
 _ASSETS = (Path(__file__).resolve().parent.parent / "assets").as_posix()
 
 _TEMPLATE = f"""
-QWidget {{ font-size: 10pt; }}
+QWidget {{ font-size: 8.5pt; }}
 
 /* ---------------------------------------------------------------- 글자 */
-QLabel#appTitle {{ font-size: 16pt; font-weight: 600; }}
-QLabel#sectionTitle {{ font-size: 11pt; font-weight: 600; }}
-QLabel#modeTitle {{ font-size: 15pt; font-weight: 600; }}
+QLabel#appTitle {{ font-size: 14pt; font-weight: 600; }}
+QLabel#sectionTitle {{ font-size: 9.5pt; font-weight: 600; }}
+QLabel#modeTitle {{ font-size: 13pt; font-weight: 600; }}
 QLabel#muted {{ color: palette(placeholder-text); }}
-QLabel#hint {{ color: palette(placeholder-text); font-size: 9pt; }}
-QLabel#warnText {{ color: {WARN}; font-size: 9pt; }}
-QLabel#timer {{ font-size: 54pt; font-weight: 300; }}
-QLabel#runningMode {{ font-size: 17pt; font-weight: 600; color: {ACCENT}; }}
-QLabel#modeRowTitle {{ font-size: 11pt; font-weight: 600; background: transparent; }}
-QLabel#endIcon {{ font-size: 34pt; }}
+QLabel#hint {{ color: palette(placeholder-text); font-size: 8pt; }}
+QLabel#warnText {{ color: {WARN}; font-size: 8pt; }}
+QLabel#timer {{ font-size: 47pt; font-weight: 300; }}
+QLabel#runningMode {{ font-size: 15pt; font-weight: 600; color: {ACCENT}; }}
+QLabel#modeRowTitle {{ font-size: 9.5pt; font-weight: 600; background: transparent; }}
+QLabel#endIcon {{ font-size: 30pt; }}
 QLabel#unlockCode {{
     font-family: Consolas, monospace;
-    font-size: 16pt;
+    font-size: 14pt;
     background: rgba(127, 127, 127, 0.14);
     border: 1px solid rgba(127, 127, 127, 0.32);
-    padding: 16px;
-    border-radius: 14px;
+    padding: 14px;
+    border-radius: 12px;
     letter-spacing: 1px;
 }}
-QLineEdit#unlockInput {{ font-family: Consolas, monospace; font-size: 16pt; }}
+QLineEdit#unlockInput {{ font-family: Consolas, monospace; font-size: 14pt; }}
 QLabel#unlockExample {{ font-family: Consolas, monospace; color: palette(placeholder-text); }}
 
 /* ---------------------------------------------------------------- 카드·띠 */
@@ -66,13 +66,13 @@ QFrame#card {{
 QFrame#banner {{
     background: rgba(217, 130, 43, 0.15);
     border: 1px solid {WARN};
-    border-radius: 12px;
+    border-radius: 10px;
 }}
-QFrame#card[leftPanel="true"] {{ min-width: 220px; max-width: 220px; }}
+QFrame#card[leftPanel="true"] {{ min-width: 191px; max-width: 191px; }}
 QFrame#notice {{
     background: rgba(46, 158, 91, 0.15);
     border: 1px solid {ACCENT};
-    border-radius: 12px;
+    border-radius: 10px;
 }}
 
 /* ---------------------------------------------------------------- 버튼 */
@@ -80,8 +80,8 @@ QPushButton {{
     background: {SOFT};
     border: 1px solid {LINE};
     border-radius: {R_CONTROL}px;
-    padding: 7px 16px;
-    min-height: 18px;
+    padding: 6px 14px;
+    min-height: 16px;
 }}
 QPushButton:hover {{ background: {SOFT_HOVER}; }}
 QPushButton:pressed {{ background: {SOFT_PRESSED}; }}
@@ -109,10 +109,10 @@ QPushButton#primary {{
     background: {ACCENT};
     color: white;
     border: none;
-    font-size: 12pt;
+    font-size: 10.5pt;
     font-weight: 600;
-    padding: 12px 30px;
-    border-radius: 22px;
+    padding: 10px 26px;
+    border-radius: 19px;
 }}
 QPushButton#primary:hover {{ background: {ACCENT_HOVER}; }}
 QPushButton#primary:pressed {{ background: {ACCENT_PRESSED}; }}
@@ -123,17 +123,17 @@ QPushButton#secondary {{
     color: {ACCENT};
     background: transparent;
     font-weight: 600;
-    padding: 7px 16px;
-    border-radius: 17px;
+    padding: 6px 14px;
+    border-radius: 15px;
 }}
 QPushButton#secondary:hover {{ background: rgba(46, 158, 91, 0.14); }}
 QPushButton#secondary:pressed {{ background: rgba(46, 158, 91, 0.24); }}
 QPushButton#secondary:disabled {{ border-color: {LINE}; color: palette(placeholder-text); }}
 
 QPushButton#chip {{
-    padding: 6px 14px;
+    padding: 5px 12px;
     border: 1px solid {LINE};
-    border-radius: 16px;
+    border-radius: 14px;
     background: transparent;
 }}
 QPushButton#chip:hover {{ background: {SOFT}; }}
@@ -147,10 +147,10 @@ QPushButton#chip:checked {{
 QPushButton#iconButton {{
     border: none;
     background: transparent;
-    padding: 4px 8px;
-    border-radius: 14px;
+    padding: 3px 7px;
+    border-radius: 12px;
     color: palette(placeholder-text);
-    font-size: 11pt;
+    font-size: 9.5pt;
 }}
 QPushButton#iconButton:hover {{ color: {DANGER}; background: rgba(192, 57, 43, 0.12); }}
 
@@ -158,7 +158,7 @@ QPushButton#linkButton {{
     border: none;
     background: transparent;
     color: palette(link);
-    padding: 5px 10px;
+    padding: 4px 9px;
     border-radius: {R_CONTROL}px;
 }}
 QPushButton#linkButton:hover {{ background: {SOFT}; }}
@@ -170,8 +170,8 @@ QPushButton#danger {{
     border: 1px solid {DANGER};
     color: {DANGER};
     background: transparent;
-    padding: 10px 24px;
-    border-radius: 20px;
+    padding: 9px 21px;
+    border-radius: 17px;
     font-weight: 600;
 }}
 QPushButton#danger:hover {{ background: rgba(192, 57, 43, 0.12); }}
@@ -181,7 +181,7 @@ QLineEdit {{
     background: palette(base);
     border: 1px solid {LINE};
     border-radius: {R_CONTROL}px;
-    padding: 7px 12px;
+    padding: 6px 10px;
     selection-background-color: {ACCENT};
 }}
 QLineEdit:focus {{ border: 1px solid {ACCENT}; }}
@@ -190,43 +190,43 @@ QComboBox {{
     background: palette(base);
     border: 1px solid {LINE};
     border-radius: {R_CONTROL}px;
-    padding: 6px 12px;
-    min-height: 18px;
+    padding: 5px 10px;
+    min-height: 16px;
 }}
 QComboBox:focus, QComboBox:on {{ border: 1px solid {ACCENT}; }}
-QComboBox::drop-down {{ border: none; width: 26px; }}
-QComboBox::down-arrow {{ image: url({_ASSETS}/arrow_down.png); width: 12px; height: 12px; }}
+QComboBox::drop-down {{ border: none; width: 23px; }}
+QComboBox::down-arrow {{ image: url({_ASSETS}/arrow_down.png); width: 10px; height: 10px; }}
 QComboBox QAbstractItemView {{ selection-background-color: rgba(46, 158, 91, 0.25); selection-color: palette(text); }}
 
 QSpinBox {{
     background: palette(base);
     border: 1px solid {LINE};
     border-radius: {R_CONTROL}px;
-    padding: 6px 30px 6px 12px;
-    min-height: 18px;
+    padding: 5px 26px 5px 10px;
+    min-height: 16px;
     selection-background-color: {ACCENT};
 }}
 QSpinBox:focus {{ border: 1px solid {ACCENT}; }}
 QSpinBox:disabled {{ color: palette(placeholder-text); }}
 QSpinBox::up-button, QSpinBox::down-button {{
     subcontrol-origin: border;
-    width: 26px;
+    width: 23px;
     border: none;
     background: transparent;
 }}
 QSpinBox::up-button {{ subcontrol-position: top right; border-top-right-radius: {R_CONTROL}px; }}
 QSpinBox::down-button {{ subcontrol-position: bottom right; border-bottom-right-radius: {R_CONTROL}px; }}
 QSpinBox::up-button:hover, QSpinBox::down-button:hover {{ background: {SOFT_HOVER}; }}
-QSpinBox::up-arrow {{ image: url({_ASSETS}/arrow_up.png); width: 12px; height: 12px; }}
-QSpinBox::down-arrow {{ image: url({_ASSETS}/arrow_down.png); width: 12px; height: 12px; }}
+QSpinBox::up-arrow {{ image: url({_ASSETS}/arrow_up.png); width: 10px; height: 10px; }}
+QSpinBox::down-arrow {{ image: url({_ASSETS}/arrow_down.png); width: 10px; height: 10px; }}
 
 /* ---------------------------------------------------------------- 체크박스·라디오 (강조색 통일) */
-QCheckBox, QRadioButton {{ spacing: 8px; }}
+QCheckBox, QRadioButton {{ spacing: 7px; }}
 QCheckBox::indicator, QListWidget#pickList::indicator {{
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     border: 1px solid #8a8f98;
-    border-radius: 6px;
+    border-radius: 5px;
     background: transparent;
 }}
 QCheckBox::indicator:hover {{ border-color: {ACCENT}; }}
@@ -240,18 +240,18 @@ QCheckBox::indicator:checked:disabled, QListWidget#pickList::indicator:checked:d
     border-color: #5b7a66;
 }}
 QRadioButton::indicator {{
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     border: 1px solid #8a8f98;
-    border-radius: 10px;
+    border-radius: 9px;
     background: transparent;
 }}
 QRadioButton::indicator:hover {{ border-color: {ACCENT}; }}
 /* 두꺼운 초록 테두리 + 가운데 흰 점 = 선택됨 */
 QRadioButton::indicator:checked {{
-    border: 5px solid {ACCENT};
-    width: 10px;
-    height: 10px;
+    border: 4px solid {ACCENT};
+    width: 9px;
+    height: 9px;
     background: white;
 }}
 
@@ -264,27 +264,27 @@ QListWidget#modeList {{
 QListWidget#modeList::item {{
     padding: 0;
     margin: 2px 0;
-    border-radius: 12px;
+    border-radius: 10px;
 }}
 QListWidget#modeList::item:hover {{ background: palette(alternate-base); }}
 QListWidget#modeList::item:selected {{
     background: rgba(46, 158, 91, 0.22);
-    border-left: 4px solid {ACCENT};
+    border-left: 3px solid {ACCENT};
 }}
 
 QListWidget#pickList {{
-    qproperty-iconSize: 24px 24px;
+    qproperty-iconSize: 21px 21px;
     border: 1px solid {LINE};
     border-radius: {R_CARD}px;
     background: palette(base);
     outline: none;
-    padding: 6px;
+    padding: 5px;
 }}
-QListWidget#pickList::item {{ border-radius: {R_CONTROL}px; padding: 2px 4px; }}
+QListWidget#pickList::item {{ border-radius: {R_CONTROL}px; padding: 2px 3px; }}
 QListWidget#pickList::item:hover {{ background: palette(alternate-base); }}
 
 QListWidget#appList {{
-    qproperty-iconSize: 20px 20px;
+    qproperty-iconSize: 17px 17px;
     background: transparent;
     border: none;
     outline: none;
@@ -297,24 +297,26 @@ QListWidget {{
     border: 1px solid {LINE};
     border-radius: {R_CONTROL}px;
     background: palette(base);
-    padding: 4px;
+    padding: 3px;
     outline: none;
 }}
-QListWidget::item {{ border-radius: 8px; padding: 6px 8px; }}
+QListWidget::item {{ border-radius: 7px; padding: 5px 7px; }}
+/* 줄마다 위젯을 넣는 목록(허용 앱·사이트 등): 위젯이 자기 여백을 가지므로 칸 여백을 빼야 글자가 잘리지 않음 */
+QListWidget[rowWidgets="true"]::item {{ padding: 0; }}
 QListWidget::item:selected {{ background: rgba(46, 158, 91, 0.25); color: palette(text); }}
 
 QTextBrowser {{
     border: 1px solid {LINE};
     border-radius: {R_CONTROL}px;
     background: palette(base);
-    padding: 6px;
+    padding: 5px;
 }}
 
 /* ---------------------------------------------------------------- 스크롤바 (얇고 둥글게) */
-QScrollBar:vertical {{ background: transparent; width: 10px; margin: 4px 2px; }}
-QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px 4px; }}
-QScrollBar::handle:vertical {{ background: rgba(127, 127, 127, 0.45); border-radius: 3px; min-height: 30px; }}
-QScrollBar::handle:horizontal {{ background: rgba(127, 127, 127, 0.45); border-radius: 3px; min-width: 30px; }}
+QScrollBar:vertical {{ background: transparent; width: 9px; margin: 3px 2px; }}
+QScrollBar:horizontal {{ background: transparent; height: 9px; margin: 2px 3px; }}
+QScrollBar::handle:vertical {{ background: rgba(127, 127, 127, 0.45); border-radius: 3px; min-height: 26px; }}
+QScrollBar::handle:horizontal {{ background: rgba(127, 127, 127, 0.45); border-radius: 3px; min-width: 26px; }}
 QScrollBar::handle:hover {{ background: rgba(127, 127, 127, 0.70); }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
@@ -323,10 +325,10 @@ QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 QProgressBar {{
     border: none;
     background: {SOFT_HOVER};
-    border-radius: 4px;
-    max-height: 8px;
+    border-radius: 3px;
+    max-height: 7px;
 }}
-QProgressBar::chunk {{ background: {ACCENT}; border-radius: 4px; }}
+QProgressBar::chunk {{ background: {ACCENT}; border-radius: 3px; }}
 """
 
 ZOOM_LEVELS = (80, 90, 100, 110, 125, 150, 175, 200)  # 화면 크기 단계 (%)

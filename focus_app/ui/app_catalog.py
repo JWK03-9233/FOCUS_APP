@@ -11,14 +11,22 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+import subprocess
+from typing import Callable, Dict, List, Optional
 
 from PySide6.QtCore import QFileInfo, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QFileIconProvider
 
-from focus_app import winapi
-from focus_app.config import KNOWN_APP_NAMES, friendly_name, normalize_exe
+from focus_app import web_apps, winapi
+from focus_app.config import (
+    KNOWN_APP_NAMES,
+    WEB_APP_BROWSERS,
+    app_id_matches,
+    friendly_name,
+    normalize_exe,
+    split_web_app,
+)
 from focus_app.enforcer import SYSTEM_EXES
 
 # 시작 메뉴 바로가기 중 앱 목록에 넣지 않을 것 (제거 프로그램, 설명서 등)
@@ -27,7 +35,7 @@ _SKIP_WORDS = ("uninstall", "제거", "setup", "installer", "help", "readme", "�
 
 @dataclass(frozen=True)
 class AppEntry:
-    exe: str  # 소문자 실행 파일 이름 (예: "chrome.exe")
+    exe: str  # 소문자 실행 파일 이름 (예: "chrome.exe"). 웹 앱이면 "chrome.exe|<앱 ID>" (config.web_app_key)
     name: str  # 화면 표시 이름 (예: "Google Chrome")
     path: str = ""  # 아이콘용 경로: 실행 파일, 또는 Store 앱의 로고 이미지(.png)
     running: bool = False
@@ -38,13 +46,43 @@ class AppEntry:
 def running_apps() -> List[AppEntry]:
     """지금 창이 열려 있는 앱 (시스템 요소와 이 앱 자신 제외)."""
     own = winapi.current_pid()
+    web = [e for e in installed_apps.get() or [] if split_web_app(e.exe)]
     result: Dict[str, AppEntry] = {}
     for info in winapi.list_visible_windows():
         exe = normalize_exe(info.exe_name)
-        if not exe or exe in SYSTEM_EXES or info.pid == own or exe in result:
+        if not exe or exe in SYSTEM_EXES or info.pid == own:
             continue
-        result[exe] = AppEntry(exe=exe, name=friendly_name(exe), path=info.exe_path, running=True)
+        app = _web_app_of(info, web)
+        if app is not None:
+            result.setdefault(app.exe, AppEntry(app.exe, app.name, app.path, running=True, launch=app.launch))
+            continue
+        if exe not in result:
+            result[exe] = AppEntry(exe=exe, name=friendly_name(exe), path=info.exe_path, running=True)
     return list(result.values())
+
+
+def _web_app_of(info: winapi.WindowInfo, web: List[AppEntry]) -> Optional[AppEntry]:
+    """브라우저에 설치한 웹 앱의 창이면 그 앱."""
+    if "_crx_" not in (getattr(info, "app_id", "") or "").lower():
+        return None
+    for e in web:
+        parts = split_web_app(e.exe)
+        if parts and parts[0] == info.exe_name and app_id_matches(info.app_id, parts[1]):
+            return e
+    return None
+
+
+def running_app_keys(web_keys: List[str]) -> set:
+    """실행 중인 앱의 실행 파일 이름 + 창이 떠 있는 웹 앱의 키 (진행 화면의 '실행 중' 점 표시용)."""
+    running = set(winapi.running_exe_names())
+    web = [(k, split_web_app(k)) for k in web_keys]
+    web = [(k, parts) for k, parts in web if parts and parts[0] in running]
+    if web:
+        for info in winapi.list_visible_windows():
+            for key, (browser, app_id) in web:
+                if info.exe_name == browser and app_id_matches(info.app_id, app_id):
+                    running.add(key)
+    return running
 
 
 def _start_menu_dirs() -> List[Path]:
@@ -100,9 +138,6 @@ def _usable_exe(path: str) -> Optional[str]:
     return path
 
 
-_WEB_APP_PROXIES = ("chrome_proxy.exe", "msedge_proxy.exe", "brave_proxy.exe", "whale_proxy.exe")
-
-
 def _start_menu_apps() -> List[AppEntry]:
     out = []
     for base in _start_menu_dirs():
@@ -114,8 +149,12 @@ def _start_menu_apps() -> List[AppEntry]:
                 target = QFileInfo(str(lnk)).symLinkTarget()
             except Exception:  # noqa: BLE001 - 깨진 바로가기는 건너뜀
                 continue
-            # 브라우저가 만든 웹 앱 바로가기는 모두 같은 공용 실행 파일(chrome_proxy 등)을 가리켜 앱으로 구분할 수 없음
-            if normalize_exe(target) in _WEB_APP_PROXIES:
+            # 브라우저에 설치한 웹 앱 (Google Keep 등): 바로가기의 앱 ID로 개별 앱이 됨
+            if normalize_exe(target) in web_apps.PROXIES:
+                found = web_apps.read_shortcut(lnk, target)
+                if found:
+                    key = f"{found[0]}|{found[1]}"
+                    out.append(AppEntry(exe=key, name=name, path=web_apps.icon_path(*found), launch=str(lnk)))
                 continue
             # 앱을 지워도 시작 메뉴 바로가기가 남는 경우가 많음 -> 실제 exe가 있을 때만
             path = _usable_exe(target)
@@ -442,6 +481,8 @@ def launch_app(exe: str, known_path: str = "") -> bool:
     if bring_running_app_to_front(exe):
         return True
     target = launch_target(exe, known_path)
+    if not target and split_web_app(normalize_exe(exe)):
+        return _launch_web_app(normalize_exe(exe))
     if not target or not sys.platform.startswith("win"):
         return False
     try:
@@ -455,9 +496,34 @@ def launch_app(exe: str, known_path: str = "") -> bool:
     return True
 
 
+def _launch_web_app(key: str) -> bool:
+    """바로가기를 못 찾은 웹 앱: 브라우저를 --app-id로 실행 (브라우저가 그 앱 창을 엶)."""
+    browser, app_id = split_web_app(key)
+    path = find_installed_path(browser) or next((e.path for e in running_apps() if e.exe == browser), "")
+    if not path or not sys.platform.startswith("win"):
+        return False
+    try:
+        subprocess.Popen([path, f"--app-id={app_id}"], cwd=str(Path(path).parent), close_fds=True)
+    except OSError:
+        return False
+    return True
+
+
+def _window_matcher(key: str) -> Optional[Callable[[str], bool]]:
+    """같은 실행 파일의 창 중 이 앱의 창만 고르는 조건 (작업 표시줄 ID로). 일반 앱이면 None."""
+    parts = split_web_app(key)
+    if parts:
+        return lambda aumid: app_id_matches(aumid, parts[1])
+    if key in WEB_APP_BROWSERS:
+        return lambda aumid: "_crx_" not in aumid.lower()  # 브라우저 자체: 웹 앱 창은 빼고
+    return None
+
+
 def bring_running_app_to_front(exe: str) -> bool:
     """이 앱의 창이 있으면 (최소화돼 있으면 복원해서) 앞으로 가져옵니다. 창이 없으면 False."""
-    hwnd = winapi.find_app_window(normalize_exe(exe))
+    key = normalize_exe(exe)
+    parts = split_web_app(key)
+    hwnd = winapi.find_app_window(parts[0] if parts else key, _window_matcher(key))
     if not hwnd:
         return False
     # 앞으로 가져오기가 Windows 포커스 제한에 막혀도 창은 이미 복원됨 -> 새로 열지 않음

@@ -7,24 +7,23 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List, Optional
 
-from PySide6.QtCore import QSize
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
-    QListWidgetItem,
     QPushButton,
-    QVBoxLayout,
     QWidget,
 )
 
+from focus_app import web_apps
 from focus_app.config import Profile, Settings, normalize_exe
-from focus_app.ui import app_catalog, theme
+from focus_app.ui import app_catalog
 from focus_app.ui.app_catalog import AppEntry
 from focus_app.ui.app_picker import AppPickerDialog
 from focus_app.ui.main_window import AppRow
 from focus_app.ui.site_list import SiteEditor
+from focus_app.ui.scroll import ExpandedList, scroll_layout
 
 
 class AllowedAppsDialog(QDialog):
@@ -46,7 +45,7 @@ class AllowedAppsDialog(QDialog):
         self.setWindowTitle("허용 앱·사이트 편집")
         self.setMinimumSize(500, 600)
 
-        layout = QVBoxLayout(self)
+        layout = scroll_layout(self)  # 내용이 많으면 창 전체를 스크롤
         layout.setSpacing(10)
         title = QLabel(f"<b>{profile.name}</b> 모드의 허용 앱과 사이트")
         title.setObjectName("sectionTitle")
@@ -66,7 +65,7 @@ class AllowedAppsDialog(QDialog):
         head.addWidget(add)
         layout.addLayout(head)
 
-        self.list = QListWidget()
+        self.list = ExpandedList()  # 안쪽 스크롤 없이 모두 펼침 (넘치면 창 전체 스크롤)
         self.list.setObjectName("appList")
         self.list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         layout.addWidget(self.list, 3)
@@ -101,10 +100,7 @@ class AllowedAppsDialog(QDialog):
         self.sites.set_context(self._apps, self._helper_installed)
         for exe in self._apps:
             row = AppRow(self._name(exe), exe, self._path(exe), self.remove_app)
-            item = QListWidgetItem()
-            item.setSizeHint(QSize(0, theme.px(46)))
-            self.list.addItem(item)
-            self.list.setItemWidget(item, row)
+            self.list.add_row(row, 40)
 
     def _add(self) -> None:
         dlg = AppPickerDialog(
@@ -144,6 +140,10 @@ class AllowedAppsDialog(QDialog):
             if exe and exe not in self._apps:
                 self._apps.append(exe)
                 self._new_entries[exe] = e
+        # 웹 앱(Google Keep 등)은 사이트 제한을 켜면 그 주소도 허용해야 열림 -> 허용 사이트에 미리 넣음
+        extra = web_apps.sites_for_new_apps([e.exe for e in entries], self.sites.sites)
+        if extra:
+            self.sites.set_values(self.sites.restrict, self.sites.sites + extra)
         self._reload()
 
     def remove_app(self, exe: str) -> None:

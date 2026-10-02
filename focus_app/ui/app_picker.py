@@ -28,14 +28,14 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
-    QVBoxLayout,
     QWidget,
 )
 
-from focus_app.config import friendly_name, normalize_exe
+from focus_app.config import app_kind_label, friendly_name, normalize_exe
 from focus_app.enforcer import SYSTEM_EXES
 from focus_app.ui import app_catalog, theme
 from focus_app.ui.app_catalog import AppEntry
+from focus_app.ui.scroll import scroll_layout
 
 _ROLE_EXE = Qt.ItemDataRole.UserRole
 _ROLE_HEADER = Qt.ItemDataRole.UserRole + 1  # 값: 구역 이름 ("favorites", "running", "installed", "hidden" …)
@@ -178,7 +178,7 @@ class AppPickerDialog(QDialog):
         self._app_paths = app_paths or (lambda exe: "")
         self._installed_shown = False
 
-        layout = QVBoxLayout(self)
+        layout = scroll_layout(self)  # 내용이 많으면 창 전체를 스크롤
         layout.setSpacing(10)
         title = QLabel(f"<b>{mode_name}</b> 모드에서 쓸 앱을 체크하세요.")
         title.setObjectName("sectionTitle")
@@ -262,7 +262,8 @@ class AppPickerDialog(QDialog):
         if not entry.usable:
             label = f"{entry.name}    · 실행 파일 없음"
         else:
-            label = f"{entry.name}    ({entry.exe})" if entry.name.lower() != entry.exe else entry.name
+            kind = app_kind_label(entry.exe)  # 실행 파일 이름, 웹 앱이면 'Chrome 앱'
+            label = f"{entry.name}    ({kind})" if entry.name.lower() != entry.exe else entry.name
             if allowed:
                 label += "  · 이미 추가됨"
         item = QListWidgetItem(app_catalog.app_icon(entry.path, entry.name), label)
@@ -270,7 +271,7 @@ class AppPickerDialog(QDialog):
         item.setData(_ROLE_FAVORITE, favorite)
         item.setData(_ROLE_HIDDEN, hidden)
         item.setData(_ROLE_USABLE, entry.usable)
-        item.setSizeHint(QSize(0, theme.px(34)))
+        item.setSizeHint(QSize(0, theme.px(30)))
         if not entry.usable:
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             item.setToolTip("실행 파일을 찾지 못해 고를 수 없습니다. 아래 '실행 파일(.exe) 직접 찾기'로 추가하세요.")

@@ -45,6 +45,54 @@ def normalize_exe(name: str) -> str:
     return name.lower()
 
 
+# ---------------------------------------------------------------- 브라우저에 설치한 웹 앱
+# Chrome·Edge 등에서 '앱으로 설치'한 사이트(Google Keep 등)는 창이 브라우저 실행 파일(chrome.exe)로 떠서
+# 실행 파일 이름으로는 브라우저와 구분되지 않습니다. 그래서 "브라우저 실행 파일|앱 ID"를 앱 이름처럼 쓰고,
+# 창의 작업 표시줄 ID(AppUserModelID, 예: "Chrome._crx_<앱 ID>")로 그 앱의 창인지 가립니다.
+WEB_APP_BROWSERS: Dict[str, str] = {
+    "chrome.exe": "Chrome",
+    "msedge.exe": "Edge",
+    "brave.exe": "Brave",
+    "whale.exe": "웨일",
+}
+WEB_APP_SEP = "|"
+_APP_ID_RE = re.compile(r"^[a-p]{32}$")  # 크롬 확장·웹 앱 ID 모양
+
+
+def web_app_key(browser_exe: str, app_id: str) -> str:
+    return f"{normalize_exe(browser_exe)}{WEB_APP_SEP}{app_id.lower()}"
+
+
+def split_web_app(key: str) -> Optional[tuple]:
+    """웹 앱 키면 (브라우저 실행 파일, 앱 ID), 아니면 None."""
+    exe, sep, app_id = (key or "").partition(WEB_APP_SEP)
+    if not sep or exe not in WEB_APP_BROWSERS or not _APP_ID_RE.match(app_id):
+        return None
+    return exe, app_id
+
+
+def app_id_matches(aumid: str, app_id: str) -> bool:
+    """창의 작업 표시줄 ID가 이 웹 앱의 것인지.
+
+    브라우저는 ID가 길면 가운데를 잘라 씁니다 (예: 앱 ID eilembjdkfgodjkcjnpgpaenohkicgjd →
+    "Chrome._crx_eilembjdkfjnpgpaenohkicgjd"). 그래서 앞뒤가 맞는지로 비교합니다.
+    """
+    for part in (aumid or "").lower().split("."):
+        if not part.startswith("_crx_"):
+            continue
+        crx = part[5:]
+        if crx == app_id:
+            return True
+        return 16 <= len(crx) < len(app_id) and app_id.startswith(crx[:6]) and app_id.endswith(crx[-10:])
+    return False
+
+
+def app_kind_label(key: str) -> str:
+    """앱 목록에서 이름 옆에 보여 줄 짧은 설명: 실행 파일 이름, 웹 앱이면 'Chrome 앱' 등."""
+    parts = split_web_app(key)
+    return f"{WEB_APP_BROWSERS[parts[0]]} 앱" if parts else normalize_exe(key)
+
+
 # 자주 쓰는 앱의 읽기 쉬운 이름 (시작 메뉴 등에서 이름을 얻지 못했을 때 사용)
 KNOWN_APP_NAMES: Dict[str, str] = {
     "notepad.exe": "메모장",
@@ -90,6 +138,8 @@ def friendly_name(exe_name: str) -> str:
     exe = normalize_exe(exe_name)
     if exe in KNOWN_APP_NAMES:
         return KNOWN_APP_NAMES[exe]
+    if split_web_app(exe):
+        return app_kind_label(exe)  # 이름을 모르는 웹 앱 (보통은 설정에 저장된 이름을 씀)
     stem = exe[:-4] if exe.endswith(".exe") else exe
     return stem[:1].upper() + stem[1:] if stem else exe
 
@@ -161,6 +211,25 @@ class Profile:
             return True
         return normalize_exe(exe_name) in self.normalized_apps()
 
+    def allows_window(self, exe_name: str, aumid: str = "") -> bool:
+        """이 창을 허용하는지. 브라우저를 허용하지 않았어도 허용한 웹 앱의 창이면 허용합니다."""
+        if self.allows(exe_name):
+            return True
+        exe = normalize_exe(exe_name)
+        if exe in WEB_APP_BROWSERS and self.browses_sites():
+            return True  # 브라우저는 허용 앱이 아니어도 허용 사이트용으로 씀 (다른 사이트는 정책으로 막힘)
+        if not aumid:
+            return False
+        for key in self.normalized_apps():
+            parts = split_web_app(key)
+            if parts and parts[0] == exe and app_id_matches(aumid, parts[1]):
+                return True
+        return False
+
+    def web_apps(self) -> List[tuple]:
+        """허용한 웹 앱들의 (브라우저 실행 파일, 앱 ID)."""
+        return [parts for parts in map(split_web_app, self.normalized_apps()) if parts]
+
     def add_app(self, exe_name: str) -> bool:
         n = normalize_exe(exe_name)
         if not n or n in self.normalized_apps():
@@ -178,6 +247,13 @@ class Profile:
     def limits_sites(self) -> bool:
         """집중 중 브라우저에서 고른 사이트만 열게 하는 모드인지."""
         return self.block_everything and self.restrict_sites
+
+    def browses_sites(self) -> bool:
+        """허용 사이트가 있어, 브라우저(Chrome·Edge·웨일·Brave)를 허용 앱에 넣지 않았어도 그 사이트용으로 쓰는지.
+
+        이때 브라우저 창은 허용하고, 허용 사이트 밖으로 가는 것은 브라우저 정책(browser_policy)이 막습니다.
+        """
+        return self.limits_sites() and bool(self.normalized_sites())
 
     def add_site(self, text: str) -> str:
         """사이트를 추가하고 정리된 주소를 돌려줍니다. 쓸 수 없는 주소면 ValueError."""

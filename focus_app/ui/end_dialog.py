@@ -7,9 +7,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QWidget
 
 from focus_app.session import format_minutes
+from focus_app.ui.scroll import scroll_layout
 
 
 class FocusEndDialog(QDialog):
@@ -27,7 +28,7 @@ class FocusEndDialog(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setMinimumWidth(380)
 
-        layout = QVBoxLayout(self)
+        layout = scroll_layout(self)  # 내용이 많으면 창 전체를 스크롤
         layout.setContentsMargins(28, 24, 28, 20)
         layout.setSpacing(8)
 

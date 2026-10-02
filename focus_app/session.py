@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from dataclasses import asdict, dataclass
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Optional
 
 from focus_app.config import data_dir
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -102,10 +105,19 @@ class FocusSession:
     @classmethod
     def clear(cls, path: Optional[Path] = None) -> None:
         path = path or cls.path()
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+        # 도우미가 마침 이 파일을 읽는 중이면 Windows에서는 지울 수 없음 (PermissionError).
+        # 남겨 두면 도우미가 계속 차단하므로 잠깐 기다렸다 다시 시도합니다.
+        for attempt in range(40):
+            try:
+                path.unlink()
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError:
+                if attempt == 39:
+                    log.exception("세션 파일을 지우지 못했습니다: %s", path)
+                    return
+                time.sleep(0.05)
 
 
 def format_minutes(minutes: int) -> str:

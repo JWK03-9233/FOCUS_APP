@@ -15,11 +15,11 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QLabel,
     QLineEdit,
-    QVBoxLayout,
     QWidget,
 )
 
 from focus_app.unlock import UnlockChallenge
+from focus_app.ui.scroll import scroll_layout
 
 
 class NoPasteLineEdit(QLineEdit):
@@ -76,7 +76,7 @@ class UnlockDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setMinimumWidth(560)
 
-        layout = QVBoxLayout(self)
+        layout = scroll_layout(self)  # 내용이 많으면 창 전체를 스크롤
         intro = QLabel(
             f"<b>{purpose}</b> — 정말 하려면 아래 문자열을 <u>직접 손으로</u> 입력하세요.<br>"
             "붙여넣기는 되지 않고, 틀리면 새 문자열이 나옵니다. 띄어쓰기는 입력하지 않아도 됩니다."

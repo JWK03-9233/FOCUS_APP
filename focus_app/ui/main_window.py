@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
-    QListView,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -35,11 +34,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from focus_app.config import Profile, Settings
+from focus_app import web_apps
+from focus_app.config import Profile, Settings, app_kind_label
 from focus_app.session import FocusSession, format_duration, format_minutes
 from focus_app.ui import app_catalog, icons, theme
 from focus_app.ui.app_picker import AppPickerDialog
 from focus_app.ui.preset_dialog import PresetDialog
+from focus_app.ui.scroll import ExpandedList, WindowScroll
 from focus_app.ui.site_list import SiteEditor
 from focus_app.ui.theme import ACCENT
 from focus_app.version import APP_NAME, __version__
@@ -105,7 +106,7 @@ class AppRow(QWidget):
         title = QLabel(name)
         title.setStyleSheet("font-weight: 600;")
         text.addWidget(title)
-        text.addWidget(_label(exe, "hint"))
+        text.addWidget(_label(app_kind_label(exe), "hint"))  # 실행 파일 이름, 웹 앱이면 'Chrome 앱'
         row.addLayout(text, 1)
         self.remove_btn = QPushButton("✕")
         self.remove_btn.setObjectName("iconButton")
@@ -216,7 +217,7 @@ class MainWindow(QMainWindow):
         self.on_hidden_to_tray = None  # 창을 닫아 트레이로 숨길 때 호출할 콜백
 
         self.stack = QStackedWidget()
-        self.setCentralWidget(self.stack)
+        self.setCentralWidget(WindowScroll(self.stack))  # 내용이 화면보다 크면 창 전체를 스크롤
         self.setup_page = self._build_setup_page()
         self.running_page = self._build_running_page()
         self.stack.addWidget(self.setup_page)
@@ -272,6 +273,22 @@ class MainWindow(QMainWindow):
         nl.addWidget(close_notice)
         self.notice.hide()
         root.addWidget(self.notice)
+
+        # --- 도우미 경고 띠: 고른 모드가 사이트 제한을 쓰는데 관리자 권한 도우미가 없을 때 (시작 전에 미리 알림)
+        self.helper_banner = QFrame()
+        self.helper_banner.setObjectName("banner")
+        hl = QHBoxLayout(self.helper_banner)
+        hl.setContentsMargins(12, 8, 8, 8)
+        hl.addWidget(_label(
+            "⚠ 관리자 권한 도우미가 설치되어 있지 않아 이 모드의 사이트 제한을 쓸 수 없습니다. "
+            "이대로 시작하면 브라우저가 모두 최소화됩니다.", wrap=True,
+        ), 1)
+        install = QPushButton("⚙  설정에서 설치")
+        install.setCursor(Qt.CursorShape.PointingHandCursor)
+        install.clicked.connect(self.preferences_requested.emit)
+        hl.addWidget(install)
+        self.helper_banner.hide()
+        root.addWidget(self.helper_banner)
 
         # --- 본문: 왼쪽 모드 목록 / 오른쪽 모드 편집
         body = QHBoxLayout()
@@ -351,7 +368,7 @@ class MainWindow(QMainWindow):
         al = QVBoxLayout(apps_page)
         al.setContentsMargins(0, 0, 0, 0)
         self.apps_stack = QStackedWidget()
-        self.app_list = QListWidget()
+        self.app_list = ExpandedList()  # 안쪽 스크롤 없이 모두 펼침 (넘치면 창 전체 스크롤)
         self.app_list.setObjectName("appList")
         self.app_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self.apps_stack.addWidget(self.app_list)
@@ -434,7 +451,7 @@ class MainWindow(QMainWindow):
         for p in self.settings.profiles:
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, p.name)
-            item.setSizeHint(QSize(0, theme.px(62)))
+            item.setSizeHint(QSize(0, theme.px(54)))
             self.mode_list.addItem(item)
             self.mode_list.setItemWidget(item, ModeRow(p))
             if p.name == select:
@@ -506,6 +523,7 @@ class MainWindow(QMainWindow):
         p = self.current_mode()
         if p is not None:
             self.site_editor.set_context(p.normalized_apps(), installed)
+            self._update_start_summary()
 
     def _on_sites_changed(self) -> None:
         p = self.current_mode()
@@ -540,10 +558,7 @@ class MainWindow(QMainWindow):
             return
         for exe in apps:
             row = AppRow(self.settings.app_display_name(exe), exe, self._app_path(exe), self._remove_app)
-            item = QListWidgetItem()
-            item.setSizeHint(QSize(0, theme.px(46)))
-            self.app_list.addItem(item)
-            self.app_list.setItemWidget(item, row)
+            self.app_list.add_row(row, 40)
         self.apps_stack.setCurrentWidget(self.app_list)
 
     def _app_path(self, exe: str) -> str:
@@ -644,6 +659,8 @@ class MainWindow(QMainWindow):
         for e in entries:
             profile.add_app(e.exe)
             self.settings.remember_app(e.exe, e.name, e.path)
+        # 웹 앱(Google Keep 등)은 사이트 제한을 켜면 그 주소도 허용해야 열림 -> 허용 사이트에 미리 넣음
+        profile.allowed_sites += web_apps.sites_for_new_apps([e.exe for e in entries], profile.normalized_sites())
         self.settings_changed.emit()
         self._refresh_mode_item()
         self._reload_apps()
@@ -744,6 +761,8 @@ class MainWindow(QMainWindow):
                 k = len(p.normalized_sites())
                 what += f" · 브라우저에서는 사이트 {k}개만" if k else " · 브라우저에서 사이트를 열 수 없습니다"
         self.start_summary.setText(f"<b>{p.name}</b> · {when}<br>{what}")
+        # 확인 전(None)에는 띄우지 않음
+        self.helper_banner.setVisible(self.helper_installed is False and p.limits_sites())
 
     def _request_start(self) -> None:
         p = self.current_mode()
@@ -852,12 +871,9 @@ class MainWindow(QMainWindow):
         cl.addSpacing(14)
         self.run_apps_title = _label("지금 쓸 수 있는 앱", "sectionTitle")
         cl.addWidget(self.run_apps_title)
-        self.run_apps = QListWidget()
+        # 허용 앱·사이트는 스크롤 없이 모두 보여 줌 (ExpandedList가 높이를 내용에 맞춤)
+        self.run_apps = ExpandedList(wrapping=True)
         self.run_apps.setObjectName("appList")
-        self.run_apps.setViewMode(QListView.ViewMode.ListMode)
-        self.run_apps.setFlow(QListView.Flow.LeftToRight)
-        self.run_apps.setWrapping(True)
-        self.run_apps.setResizeMode(QListView.ResizeMode.Adjust)
         self.run_apps.setSpacing(6)
         self.run_apps.setIconSize(QSize(20, 20))
         self.run_apps.setSelectionMode(QListWidget.SelectionMode.NoSelection)
@@ -865,23 +881,20 @@ class MainWindow(QMainWindow):
         self._run_apps_cursor = _LaunchCursorFilter(self.run_apps)
         self.run_apps.setItemDelegate(_RunAppDelegate(self.run_apps))
         self.run_apps.itemClicked.connect(self._on_run_app_clicked)
-        cl.addWidget(self.run_apps, 1)
+        cl.addWidget(self.run_apps)
 
         self.run_sites_title = _label("지금 열 수 있는 사이트", "sectionTitle")
         cl.addWidget(self.run_sites_title)
-        self.run_sites = QListWidget()
+        self.run_sites = ExpandedList(wrapping=True)
         self.run_sites.setObjectName("appList")
-        self.run_sites.setViewMode(QListView.ViewMode.ListMode)
-        self.run_sites.setFlow(QListView.Flow.LeftToRight)
-        self.run_sites.setWrapping(True)
-        self.run_sites.setResizeMode(QListView.ResizeMode.Adjust)
         self.run_sites.setSpacing(6)
         self.run_sites.setIconSize(QSize(18, 18))
         self.run_sites.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self.run_sites.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._run_sites_cursor = _LaunchCursorFilter(self.run_sites)
         self.run_sites.itemClicked.connect(self._on_run_site_clicked)
-        cl.addWidget(self.run_sites, 1)
+        cl.addWidget(self.run_sites)
+        cl.addStretch(1)
         cl.addWidget(_label("작업 표시줄, 시작 메뉴, 작업 관리자, Windows 설정은 항상 쓸 수 있습니다.", "hint", True))
         root.addWidget(card, 1)
 

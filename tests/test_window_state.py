@@ -43,11 +43,11 @@ def test_zoom_steps_and_limits():
 def test_stylesheet_scales_text_and_spacing_but_not_hairlines():
     big = theme.build_stylesheet(150)
     assert theme.build_stylesheet(100) == theme.STYLESHEET
-    assert "QWidget { font-size: 15pt; }" in big
-    assert "padding: 18px 45px" in big  # 시작 버튼 여백
+    assert "QWidget { font-size: 12.8pt; }" in big  # 기본 8.5pt
+    assert "padding: 15px 39px" in big  # 시작 버튼 여백 (기본 10px 26px)
     assert "border: 1px solid" in big  # 1px 선은 그대로
     assert "#2e9e5b" in big  # 색은 건드리지 않음
-    assert "font-size: 8pt" in theme.build_stylesheet(80)
+    assert "font-size: 6.8pt" in theme.build_stylesheet(80)
 
 
 def test_ctrl_keys_and_wheel_change_zoom_everywhere(qapp, manager):
@@ -55,7 +55,7 @@ def test_ctrl_keys_and_wheel_change_zoom_everywhere(qapp, manager):
     dlg.show()
     QTest.keyClick(dlg, Qt.Key.Key_Equal, Qt.KeyboardModifier.ControlModifier)
     assert manager.settings.ui_zoom == 110
-    assert "font-size: 11pt" in qapp.styleSheet()
+    assert "font-size: 9.4pt" in qapp.styleSheet()
     QTest.keyClick(dlg, Qt.Key.Key_Minus, Qt.KeyboardModifier.ControlModifier)
     QTest.keyClick(dlg, Qt.Key.Key_Minus, Qt.KeyboardModifier.ControlModifier)
     assert manager.settings.ui_zoom == 90

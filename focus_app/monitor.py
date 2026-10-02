@@ -85,7 +85,10 @@ class AllowlistMonitor:
             hosted = self.backend.hosted_child(hwnd)
             if hosted is not None and hosted.exe_name:
                 pid, exe = hosted.pid, hosted.exe_name
-        return ForegroundWindow(hwnd=hwnd, pid=pid, exe_name=exe, class_name=info.class_name, title=info.title)
+        return ForegroundWindow(
+            hwnd=hwnd, pid=pid, exe_name=exe, class_name=info.class_name, title=info.title,
+            app_id=getattr(info, "app_id", ""),
+        )
 
     # ------------------------------------------------------------- 동작
     def set_profile(self, profile: Profile) -> None:

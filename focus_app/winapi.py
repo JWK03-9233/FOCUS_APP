@@ -10,7 +10,9 @@ import ctypes
 import sys
 from ctypes import wintypes
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Callable, List, Optional
+
+from focus_app.config import WEB_APP_BROWSERS
 
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -37,6 +39,7 @@ class WindowInfo:
     exe_path: str
     class_name: str
     title: str
+    app_id: str = ""  # 작업 표시줄 ID (브라우저 창만 읽음. 웹 앱 창이면 "Chrome._crx_<앱 ID>" 등)
 
 
 if IS_WINDOWS:  # pragma: no cover - Windows 전용
@@ -297,7 +300,67 @@ def describe_window(hwnd: int) -> Optional[WindowInfo]:
         exe_path=path,
         class_name=window_class(hwnd),
         title=window_title(hwnd),
+        app_id=app_user_model_id(hwnd) if exe in WEB_APP_BROWSERS else "",
     )
+
+
+if IS_WINDOWS:  # pragma: no cover - Windows 전용
+
+    class _GUID(ctypes.Structure):
+        _fields_ = [("d1", ctypes.c_uint32), ("d2", ctypes.c_uint16), ("d3", ctypes.c_uint16),
+                    ("d4", ctypes.c_ubyte * 8)]
+
+    class _PROPERTYKEY(ctypes.Structure):
+        _fields_ = [("fmtid", _GUID), ("pid", wintypes.DWORD)]
+
+    class _PROPVARIANT(ctypes.Structure):
+        _fields_ = [("vt", ctypes.c_ushort), ("r1", ctypes.c_ushort), ("r2", ctypes.c_ushort),
+                    ("r3", ctypes.c_ushort), ("p", ctypes.c_void_p), ("p2", ctypes.c_void_p)]
+
+    def _guid(text: str) -> "_GUID":
+        import uuid
+
+        u = uuid.UUID(text)
+        g = _GUID(u.fields[0], u.fields[1], u.fields[2])
+        g.d4[:] = u.bytes[8:]
+        return g
+
+    _IID_IPropertyStore = _guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99")
+    _PKEY_AppUserModel_ID = _PROPERTYKEY(_guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), 5)
+    _VT_LPWSTR = 31
+    shell32 = ctypes.WinDLL("shell32")
+    ole32 = ctypes.WinDLL("ole32")
+    shell32.SHGetPropertyStoreForWindow.argtypes = [wintypes.HWND, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    shell32.SHGetPropertyStoreForWindow.restype = ctypes.c_long
+    _GetValue = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(_PROPERTYKEY),
+                                   ctypes.POINTER(_PROPVARIANT))
+    _Release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
+
+
+def app_user_model_id(hwnd: int) -> str:
+    """창의 작업 표시줄 ID (AppUserModelID). 따로 정하지 않은 창이면 빈 문자열.
+
+    브라우저에 설치한 웹 앱 창은 브라우저가 "Chrome._crx_<앱 ID>"처럼 앱마다 다른 ID를 붙입니다.
+    """
+    if not IS_WINDOWS or not hwnd:
+        return ""
+    store = ctypes.c_void_p()  # pragma: no cover
+    if shell32.SHGetPropertyStoreForWindow(hwnd, ctypes.byref(_IID_IPropertyStore), ctypes.byref(store)) < 0:
+        return ""  # pragma: no cover  (HRESULT: 음수면 실패)
+    if not store:  # pragma: no cover
+        return ""
+    # IPropertyStore vtable: QueryInterface, AddRef, Release, GetCount, GetAt, GetValue, ...
+    vtbl = ctypes.cast(ctypes.cast(store, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
+    value = _PROPVARIANT()  # pragma: no cover
+    try:  # pragma: no cover
+        if _GetValue(vtbl[5])(store, ctypes.byref(_PKEY_AppUserModel_ID), ctypes.byref(value)) < 0:  # S_FALSE(1)도 성공
+            return ""
+        return ctypes.wstring_at(value.p) if value.vt == _VT_LPWSTR and value.p else ""
+    except OSError:  # pragma: no cover
+        return ""
+    finally:  # pragma: no cover
+        ole32.PropVariantClear(ctypes.byref(value))
+        _Release(vtbl[2])(store)
 
 
 def hosted_child_window(hwnd: int) -> Optional[WindowInfo]:
@@ -465,8 +528,11 @@ def _is_cloaked(hwnd: int) -> bool:  # pragma: no cover - Windows 전용
         return False
 
 
-def find_app_window(exe_name: str) -> int:
-    """이 실행 파일의 앱 창 중 가장 최근에 쓴 것 (최소화된 창 포함, 트레이로 숨긴 창은 제외). 없으면 0."""
+def find_app_window(exe_name: str, app_id_match: Optional[Callable[[str], bool]] = None) -> int:
+    """이 실행 파일의 앱 창 중 가장 최근에 쓴 것 (최소화된 창 포함, 트레이로 숨긴 창은 제외). 없으면 0.
+
+    ``app_id_match``를 주면 작업 표시줄 ID가 그 조건에 맞는 창만 (브라우저에 설치한 웹 앱 구분용).
+    """
     if not IS_WINDOWS or not exe_name:
         return 0
     exe_name = exe_name.lower()  # pragma: no cover
@@ -484,7 +550,7 @@ def find_app_window(exe_name: str) -> int:
         if exe == "applicationframehost.exe":  # Store 앱은 호스트 창 안의 실제 앱으로 판단
             hosted = hosted_child_window(int(hwnd))
             exe = hosted.exe_name if hosted else ""
-        if exe == exe_name:
+        if exe == exe_name and (app_id_match is None or app_id_match(info.app_id)):
             found.append(int(hwnd))
             return False  # EnumWindows는 앞에 있는 창부터 돌려주므로 처음 것이 가장 최근 창
         return True

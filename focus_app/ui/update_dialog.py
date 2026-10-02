@@ -15,13 +15,13 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QTextBrowser,
-    QVBoxLayout,
     QWidget,
 )
 
 from focus_app import updater
 from focus_app.updater import ReleaseInfo, UpdateError
 from focus_app.version import __version__
+from focus_app.ui.scroll import scroll_layout
 
 
 class _Bridge(QObject):
@@ -73,7 +73,7 @@ class UpdateDialog(QDialog):
         self.bridge.progress.connect(self._on_progress)
         self.bridge.ready.connect(self._on_ready)
 
-        layout = QVBoxLayout(self)
+        layout = scroll_layout(self)  # 내용이 많으면 창 전체를 스크롤
         layout.setSpacing(10)
         self.title = QLabel("업데이트 확인 중…")
         self.title.setObjectName("sectionTitle")

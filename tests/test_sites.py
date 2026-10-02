@@ -174,7 +174,8 @@ def test_site_editor_add_remove_and_warnings(qapp, monkeypatch):
     assert ed.sites == ["docs.google.com/document"] and changes
 
     ed.set_context(["code.exe"], True)
-    assert not ed.warning.isHidden() and "없어" in ed.warning.text()  # 지원 브라우저가 허용 앱에 없음
+    assert ed.warning.isHidden()  # 브라우저를 허용 앱에 넣지 않아도 허용 사이트는 열 수 있음
+    assert "넣지 않아도" in ed.empty.text()
     ed.set_context(["chrome.exe", "firefox.exe"], False)
     assert "Firefox" in ed.warning.text() and "도우미" in ed.warning.text()
     ed.set_context(["chrome.exe"], True)

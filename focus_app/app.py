@@ -7,13 +7,12 @@ import logging
 import time
 from typing import List, Optional, Tuple
 
-import shiboken6
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon
 
 from focus_app import browser_policy, helper, taskmgr_lock, updater, winapi
-from focus_app.config import Profile, Settings, data_dir, site_url
+from focus_app.config import Profile, Settings, data_dir, site_url, split_web_app
 from focus_app.enforcer import ForegroundWindow
 from focus_app.monitor import AllowlistMonitor
 from focus_app.session import FocusSession, format_duration
@@ -112,7 +111,7 @@ class FocusApp:
     # ------------------------------------------------------------- 창
     def show_window(self) -> None:
         if self.session is not None:
-            self.window.set_open_apps(winapi.running_exe_names())
+            self.window.set_open_apps(self._running_apps())
         self.window.showNormal()
         self.window.raise_()
         self.window.activateWindow()
@@ -189,6 +188,12 @@ class FocusApp:
                 self.menu.insertAction(before, action)
                 self._app_actions.append(action)
 
+    def _running_apps(self) -> set:
+        """실행 중인 앱 (실행 파일 이름 + 창이 떠 있는 허용 웹 앱의 키). 진행 화면의 점 표시용."""
+        profile = self._session_profile()
+        keys = [k for k in profile.normalized_apps() if split_web_app(k)] if profile is not None else []
+        return app_catalog.running_app_keys(keys)
+
     def launch_app(self, exe: str) -> None:
         """허용 앱을 엽니다 (진행 화면의 앱 아이콘이나 트레이 메뉴에서)."""
         if exe not in self._allowed_now():
@@ -239,7 +244,7 @@ class FocusApp:
                 self._set_icon("active")
             self.window.update_running(s, blocked)
             if self.window.isVisible():  # 창이 보일 때만 확인 (실행 중인 앱 옆에 점, 사이트 제한 상태)
-                self.window.set_open_apps(winapi.running_exe_names())
+                self.window.set_open_apps(self._running_apps())
                 self._refresh_site_status()
         self.status_action.setText(text)
         self.tray.setToolTip(tip)
@@ -389,8 +394,6 @@ class FocusApp:
 
     def _take_worker_results(self) -> None:
         """작업 스레드가 남긴 결과를 화면에 반영합니다 (UI 스레드에서만 호출)."""
-        if not shiboken6.isValid(self.window):
-            return  # 창이 이미 지워짐 (테스트 등에서 컨트롤러만 남은 경우)
         installed, self._helper_check_result = self._helper_check_result, None
         if installed is not None:
             self._on_helper_installed(installed)
@@ -619,7 +622,11 @@ class FocusApp:
     def _allowed_browsers(self) -> List[str]:
         profile = self._session_profile()
         apps = profile.normalized_apps() if profile is not None else []
-        return [exe for exe in apps if exe in browser_policy.SUPPORTED_EXES]
+        allowed = [exe for exe in apps if exe in browser_policy.SUPPORTED_EXES]
+        if not allowed and profile is not None and profile.browses_sites():
+            # 브라우저를 허용 앱에 넣지 않았어도 허용 사이트는 지원 브라우저로 염 (Chrome 먼저)
+            allowed = [b.exe for b in browser_policy.BROWSERS]
+        return allowed
 
     def _browser_gate(self, window: ForegroundWindow) -> bool:
         """허용 브라우저라도 사이트 제한이 아직 안 걸려 있으면 막음 (False)."""
@@ -632,7 +639,7 @@ class FocusApp:
 
     def _is_gated_browser(self, window: ForegroundWindow) -> bool:
         profile = self._session_profile()
-        return (profile is not None and profile.allows(window.exe_name)
+        return (profile is not None and profile.allows_window(window.exe_name, window.app_id)
                 and window.exe_name in browser_policy.SUPPORTED_EXES)
 
     def _on_browser_gated(self, window: ForegroundWindow) -> None:
@@ -688,7 +695,7 @@ class FocusApp:
     def _pick_browser(self) -> Tuple[str, str]:
         """사이트를 열 브라우저 (실행 파일, 경로): 허용한 지원 브라우저 중 실행 중인 것을 먼저. 없으면 ("", "")."""
         browsers = self._allowed_browsers()
-        browsers.sort(key=lambda e: not browser_policy.running_pids(e))
+        browsers.sort(key=lambda e: not browser_policy.has_window(e))
         for exe in browsers:
             path = self._browser_path(exe)
             if path:
@@ -714,11 +721,17 @@ class FocusApp:
         if browser_policy.stale_browsers([exe], applied_at):
             self.restart_browsers(url=url, only=[exe])
             return
+        if browser_policy.stale_background(exe, applied_at):
+            # 창 없이 뒤에서만 돌던 옛 프로세스: 닫을 탭이 없으니 묻지 않고 끝낸 뒤 이 사이트만 엶
+            run_in_thread(lambda: browser_policy.restart_browser(exe, path, url, restore=False), "browser-background")
+            log.info("허용 사이트 열기 (뒤에서 돌던 %s을(를) 끝내고): %s", exe, url)
+            return
         if browser_policy.open_url(path, url):
             log.info("허용 사이트 열기: %s (%s)", url, exe)
 
     def _running_browsers(self) -> List[str]:
-        return [b.exe for b in browser_policy.BROWSERS if browser_policy.running_pids(b.exe)]
+        """창이 떠 있는 지원 브라우저 (창 없이 뒤에서만 도는 Edge 등은 빼고: 다시 시작하면 창이 새로 열림)."""
+        return [b.exe for b in browser_policy.BROWSERS if browser_policy.has_window(b.exe)]
 
     def restart_browsers(self, url: str = "", only: Optional[List[str]] = None, after_release: bool = False) -> None:
         """브라우저를 다시 시작해 새 정책을 읽게 합니다 (확인을 받은 뒤, 열려 있던 탭은 다시 열림)."""
