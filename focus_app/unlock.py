@@ -26,6 +26,7 @@ COMPLEXITY = {
 DEFAULT_COMPLEXITY = "basic"
 MIN_LENGTH = 32  # 설정에서 고를 수 있는 가장 짧은 길이
 MAX_LENGTH = 256
+EDIT_LENGTH = 16  # 집중 중 허용 앱·사이트 편집용 (집중을 끝내지 않으므로 짧게)
 
 
 def clean_complexity(value: str) -> str:

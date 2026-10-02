@@ -11,7 +11,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon
 
-from focus_app import browser_policy, helper, taskmgr_lock, updater, winapi
+from focus_app import browser_policy, helper, taskmgr_lock, unlock, updater, winapi
 from focus_app.config import Profile, Settings, data_dir, site_url, split_web_app
 from focus_app.enforcer import ForegroundWindow
 from focus_app.monitor import AllowlistMonitor
@@ -459,10 +459,11 @@ class FocusApp:
 
     # ------------------------------------------------------ 집중 중 앱 편집
     def edit_apps_during_focus(self) -> None:
-        """해제 문자열을 입력하면 집중을 끝내지 않고 지금 모드의 허용 앱만 고칩니다."""
+        """짧은 해제 문자열(16글자)을 입력하면 집중을 끝내지 않고 지금 모드의 허용 앱만 고칩니다.
+        고친 목록은 그 모드 설정에 저장되어 이후 집중에도 그대로 쓰입니다."""
         if not self.active or self._dialog_open:
             return
-        if not self._confirm("허용 앱 편집"):
+        if not self._confirm("허용 앱 편집", length=unlock.EDIT_LENGTH):
             return
         session = self.session
         profile = self.settings.get_profile(session.profile) if session else None
@@ -828,14 +829,14 @@ class FocusApp:
     def _dialog_parent(self):
         return self.window if self.window.isVisible() else None
 
-    def _confirm(self, purpose: str) -> bool:
+    def _confirm(self, purpose: str, length: Optional[int] = None) -> bool:
         if self._dialog_open:
             return False
         self._dialog_open = True
         try:
             parent = self.window if self.window.isVisible() else None
             return confirm_with_code(
-                self.settings.unlock_code_length, purpose, parent=parent,
+                length or self.settings.unlock_code_length, purpose, parent=parent,
                 complexity=self.settings.unlock_code_complexity,
             )
         finally:

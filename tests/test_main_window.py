@@ -318,8 +318,10 @@ def test_edit_apps_during_focus_requires_code_and_keeps_session(qapp, monkeypatc
         ctl.start_focus(name, 30)
         session = ctl.session
 
-        monkeypatch.setattr(ctl, "_confirm", lambda purpose: False)  # 문자열을 틀리거나 취소
+        lengths = []
+        monkeypatch.setattr(ctl, "_confirm", lambda purpose, length=None: lengths.append(length) or False)  # 틀리거나 취소
         ctl.edit_apps_during_focus()
+        assert lengths == [16]  # 편집용은 짧은 문자열
         assert "obsidian.exe" not in ctl.settings.get_profile(name).normalized_apps()
 
         def fake_exec(self):
@@ -327,7 +329,7 @@ def test_edit_apps_during_focus_requires_code_and_keeps_session(qapp, monkeypatc
             self.remove_app("notepad.exe")
             return 1  # Accepted
 
-        monkeypatch.setattr(ctl, "_confirm", lambda purpose: True)
+        monkeypatch.setattr(ctl, "_confirm", lambda purpose, length=None: True)
         monkeypatch.setattr(allowed_apps_dialog.AllowedAppsDialog, "exec", fake_exec)
         ctl.edit_apps_during_focus()
 
@@ -337,6 +339,8 @@ def test_edit_apps_during_focus_requires_code_and_keeps_session(qapp, monkeypatc
         assert not ctl.monitor.profile.allows("notepad.exe")
         assert ctl.session is session and ctl.active  # 집중은 그대로
         assert "obsidian.exe" in Settings.load().get_profile(name).normalized_apps()  # 저장됨
+        ctl._end_session("manual")
+        assert "obsidian.exe" in ctl.settings.get_profile(name).normalized_apps()  # 집중이 끝나도 모드에 남음
     finally:
         ctl._end_session("manual")
         _close(ctl)
