@@ -1027,3 +1027,59 @@ def test_running_page_height_follows_its_own_content(qapp):
     qapp.processEvents()
     assert scroll.verticalScrollBar().maximum() > 0  # 설정 화면은 길어서 창 전체 스크롤
     w.hide()
+
+
+def test_session_extend():
+    s = FocusSession.start("A", 30, now=1000.0)
+    assert s.extend(10, now=1500.0) and s.ends_at == 1000.0 + 40 * 60
+    assert s.extend(5, now=99999.0) and s.ends_at == 99999.0 + 300  # 이미 지났으면 지금부터
+    assert not FocusSession.start("A", None).extend(10)
+
+
+def test_add_time_during_focus_needs_no_code(qapp, monkeypatch):
+    ctl = _controller(qapp)
+    try:
+        ctl.start_focus(ctl.settings.active_profile, 30)
+        before = ctl.session.ends_at
+        monkeypatch.setattr(ctl, "_confirm", lambda *a, **k: pytest.fail("시간 추가에는 해제 문자열이 필요 없음"))
+        monkeypatch.setattr(ctl, "_ask_minutes", lambda title: 20)
+        ctl.add_time_during_focus()
+        assert ctl.session.ends_at == pytest.approx(before + 20 * 60)
+        assert FocusSession.load().ends_at == pytest.approx(ctl.session.ends_at)  # 저장됨
+    finally:
+        ctl._end_session("manual")
+        _close(ctl)
+
+
+def test_change_mode_during_focus_requires_short_code_and_asks_time(qapp, monkeypatch):
+    ctl = _controller(qapp)
+    try:
+        first, second = ctl.settings.profile_names()[:2]
+        ctl.start_focus(first, 30)
+        session, before = ctl.session, ctl.session.ends_at
+
+        lengths = []
+        monkeypatch.setattr(ctl, "_confirm", lambda purpose, length=None: lengths.append(length) or False)
+        ctl.change_mode_during_focus()
+        assert lengths == [16] and ctl.session.profile == first
+
+        monkeypatch.setattr(ctl, "_confirm", lambda purpose, length=None: True)
+        monkeypatch.setattr(ctl, "_ask_mode", lambda names: second)
+        asked = []
+        monkeypatch.setattr(ctl, "_ask_yes", lambda title, text: asked.append(text) or True)
+        monkeypatch.setattr(ctl, "_ask_minutes", lambda title: 15)
+        ctl.change_mode_during_focus()
+        assert asked and ctl.session is session and ctl.session.profile == second
+        assert ctl.session.ends_at == pytest.approx(before + 15 * 60)
+        assert ctl.monitor.profile.name == second
+        assert FocusSession.load().profile == second  # 도우미도 새 모드를 따름
+
+        monkeypatch.setattr(ctl, "_ask_mode", lambda names: first)
+        monkeypatch.setattr(ctl, "_ask_yes", lambda title, text: False)  # 시간은 그대로
+        monkeypatch.setattr(ctl, "_ask_minutes", lambda title: pytest.fail("묻지 않아야 함"))
+        ends = ctl.session.ends_at
+        ctl.change_mode_during_focus()
+        assert ctl.session.profile == first and ctl.session.ends_at == ends
+    finally:
+        ctl._end_session("manual")
+        _close(ctl)

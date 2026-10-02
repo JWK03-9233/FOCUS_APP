@@ -233,6 +233,16 @@ QPushButton#linkButton:hover {{ background: {SOFT}; }}
 QPushButton#linkButton:default {{ background: transparent; border: none; color: palette(link); font-weight: normal; }}
 QPushButton#iconButton:default {{ background: transparent; border: none; font-weight: normal; }}
 
+QPushButton#runMenuButton {{
+    background: transparent;
+    border: 1px solid {LINE};
+    border-radius: 10px;
+    padding: 6px 12px;
+    font-size: 16px;
+    color: palette(placeholder-text);
+}}
+QPushButton#runMenuButton:hover {{ color: {ACCENT}; border-color: {ACCENT}; background: {tint(ACCENT, 0.10)}; }}
+QPushButton#runMenuButton::menu-indicator {{ image: none; width: 0; }}
 QPushButton#danger {{
     border: 1px solid {DANGER};
     color: {DANGER};

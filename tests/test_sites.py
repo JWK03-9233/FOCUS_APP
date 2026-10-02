@@ -167,7 +167,11 @@ def test_site_editor_add_remove_and_warnings(qapp, monkeypatch):
     assert not ed.add_btn.isEnabled()
     ed.check.setChecked(True)
     assert ed.restrict and ed.add_btn.isEnabled()
+    changes.clear()
     bad = ed.add_sites("https://www.notion.so, docs.google.com/document  잘못된주소")
+    assert ed.sites == [] and ed.library == ["notion.so", "docs.google.com/document"]  # 추가만, 체크는 안 함
+    assert not changes
+    ed.add_sites("notion.so docs.google.com/document", check=True)
     assert ed.sites == ["notion.so", "docs.google.com/document"]
     assert bad == ["잘못된주소"] and warned
     ed.remove_site("notion.so")
@@ -194,7 +198,7 @@ def test_main_window_edits_sites_and_shows_them_while_running(qapp):
         p.allowed_apps = ["chrome.exe"]
         w._show_mode()
         w.site_editor.check.setChecked(True)
-        w.site_editor.add_sites("notion.so")
+        w.site_editor.add_sites("notion.so", check=True)
         assert p.restrict_sites and p.normalized_sites() == ["notion.so"]
         assert "사이트 1개" in w.start_summary.text()
 
@@ -246,7 +250,7 @@ def test_allowed_apps_dialog_saves_sites(qapp):
     p = s.current_profile()
     dlg = AllowedAppsDialog(s, p)
     dlg.sites.check.setChecked(True)
-    dlg.sites.add_sites("notion.so")
+    dlg.sites.add_sites("notion.so", check=True)
     assert not p.restrict_sites  # 저장 전까지 원본은 그대로
     dlg.apply_to(s)
     assert p.restrict_sites and p.normalized_sites() == ["notion.so"]
@@ -313,4 +317,113 @@ def test_end_notice_offers_restart_even_for_background_browser(qapp, monkeypatch
         ctl.window.notice_btn.click()  # 창이 없으니 묻지 않고 뒤에서 돌던 프로세스만 끝냄
         assert closed == ["chrome.exe"]
     finally:
+        _close(ctl)
+
+
+# ---------------------------------------------------------------- 저장한 사이트 목록
+def test_saved_sites_migrate_from_profiles_and_persist(tmp_path):
+    raw = {"profiles": [{"name": "A", "allowed_sites": ["notion.so"]}], "saved_sites": ["https://Arxiv.org/"]}
+    s = Settings.from_dict(raw)
+    assert s.saved_sites == ["arxiv.org", "notion.so"]
+    path = tmp_path / "s.json"
+    s.save(path)
+    assert Settings.load(path).saved_sites == ["arxiv.org", "notion.so"]
+
+
+def test_site_editor_uncheck_keeps_site_and_delete_removes_it(qapp, monkeypatch):
+    from focus_app.ui import site_list
+
+    ed = site_list.SiteEditor()
+    lib = []
+    ed.library_changed.connect(lambda: lib.append(1))
+    ed.set_values(True, ["notion.so"], ["arxiv.org"])
+    assert ed.library == ["arxiv.org", "notion.so"] and ed.list.count() == 2
+    ed.remove_site("notion.so")  # 체크만 풂
+    assert ed.sites == [] and "notion.so" in ed.library and not lib
+    ed._on_row_toggled("arxiv.org", True)  # 저장해 둔 사이트를 다시 체크
+    assert ed.sites == ["arxiv.org"]
+    ed.add_sites("github.com")
+    assert ed.library[-1] == "github.com" and "github.com" not in ed.sites and lib  # 기본은 체크 안 함
+    ed.delete_site("arxiv.org")
+    assert "arxiv.org" not in ed.library and "arxiv.org" not in ed.sites
+
+
+def test_site_editor_remove_only_cannot_add(qapp):
+    from focus_app.ui import site_list
+
+    ed = site_list.SiteEditor()
+    ed.set_values(True, ["notion.so"], ["arxiv.org"])
+    ed.set_remove_only(True)
+    assert ed.list.count() == 1 and ed.add_btn.isHidden() and not ed.check.isEnabled()
+    ed._on_row_toggled("arxiv.org", True)  # 처음에 없던 사이트는 체크해도 무시
+    assert ed.sites == ["notion.so"]
+    ed._on_row_toggled("notion.so", False)
+    assert ed.sites == []
+    ed._on_row_toggled("notion.so", True)  # 원래 있던 것은 다시 체크 가능
+    assert ed.sites == ["notion.so"]
+
+
+def test_main_window_site_library_delete_applies_to_all_modes(qapp):
+    from focus_app.ui.main_window import MainWindow
+
+    s = Settings()
+    s.profiles[1].allowed_sites = ["notion.so"]
+    s.remember_sites(["notion.so"])
+    w = MainWindow(s)
+    try:
+        w._show_mode()
+        w.site_editor.check.setChecked(True)
+        w.site_editor.add_sites("arxiv.org")
+        assert s.saved_sites == ["notion.so", "arxiv.org"]
+        w.site_editor.remove_site("arxiv.org")
+        assert "arxiv.org" in s.saved_sites  # 체크를 풀어도 저장한 목록에 남음
+        w.site_editor.delete_site("notion.so")
+        assert "notion.so" not in s.saved_sites and s.profiles[1].normalized_sites() == []
+    finally:
+        w.allow_close = True
+        w.close()
+
+
+def test_remove_only_dialog_never_adds(qapp):
+    from focus_app.ui.allowed_apps_dialog import AllowedAppsDialog
+    from focus_app.ui.app_catalog import AppEntry
+
+    s = Settings()
+    p = s.current_profile()
+    p.allowed_apps = ["notepad.exe", "calc.exe"]
+    p.restrict_sites, p.allowed_sites = True, ["notion.so"]
+    s.remember_sites(["notion.so", "arxiv.org"])
+    dlg = AllowedAppsDialog(s, p, remove_only=True)
+    dlg.add_entries([AppEntry("obsidian.exe", "Obsidian", "")])
+    dlg.remove_app("calc.exe")
+    dlg.sites._on_row_toggled("arxiv.org", True)
+    dlg.sites._on_row_toggled("notion.so", False)
+    dlg.apply_to(s)
+    assert p.normalized_apps() == ["notepad.exe"] and p.normalized_sites() == []
+    assert p.restrict_sites and "notion.so" in s.saved_sites
+    dlg.deleteLater()
+
+
+def test_controller_remove_apps_without_code(qapp, monkeypatch):
+    from focus_app import app as app_mod
+    from focus_app.ui import allowed_apps_dialog
+
+    ctl = app_mod.FocusApp(qapp, show_window=False)
+    try:
+        p = ctl.settings.current_profile()
+        p.allowed_apps = ["notepad.exe", "calc.exe"]
+        ctl.start_focus(p.name, 30)
+        monkeypatch.setattr(ctl, "_confirm", lambda *a, **k: pytest.fail("빼기에는 해제 문자열이 필요 없음"))
+
+        def fake_exec(self):
+            assert self.remove_only
+            self.remove_app("calc.exe")
+            return 1
+
+        monkeypatch.setattr(allowed_apps_dialog.AllowedAppsDialog, "exec", fake_exec)
+        ctl.remove_apps_during_focus()
+        assert ctl.settings.get_profile(p.name).normalized_apps() == ["notepad.exe"]
+        assert not ctl.monitor.profile.allows("calc.exe") and ctl.active
+    finally:
+        ctl._end_session("manual")
         _close(ctl)

@@ -326,6 +326,8 @@ class Settings:
     show_block_notifications: bool = True
     # 화면 표시용 앱 정보: 실행 파일 이름 -> {"name": 표시 이름, "path": 전체 경로}
     app_info: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # 한 번 추가한 사이트 (모든 모드가 같이 씀). 모드에서는 이 중 쓸 사이트만 체크해 allowed_sites에 둠
+    saved_sites: List[str] = field(default_factory=list)
 
     # ------------------------------------------------------------- 조회
     def profile_names(self) -> List[str]:
@@ -399,6 +401,11 @@ class Settings:
     def app_path(self, exe_name: str) -> str:
         return self.app_info.get(normalize_exe(exe_name), {}).get("path", "")
 
+    def remember_sites(self, sites: List[str]) -> None:
+        """사이트들을 저장한 사이트 목록에 넣습니다 (이미 있으면 그대로)."""
+        cleaned = (normalize_site(str(x)) for x in sites)
+        self.saved_sites = list(dict.fromkeys([*self.saved_sites, *(x for x in cleaned if x)]))
+
     # --------------------------------------------------------- 영속화
     @classmethod
     def path(cls) -> Path:
@@ -446,7 +453,7 @@ class Settings:
                     settings.remember_app(str(exe), str(info.get("name", "")), str(info.get("path", "")))
         for f in fields(cls):
             if f.name in ("profiles", "app_info", "duration_presets", "favorite_apps", "hidden_apps",
-                          "window_geometries") or f.name not in raw:
+                          "window_geometries", "saved_sites") or f.name not in raw:
                 continue
             value = raw[f.name]
             current = getattr(settings, f.name)
@@ -476,6 +483,11 @@ class Settings:
             if isinstance(values, list):
                 cleaned = list(dict.fromkeys(normalize_exe(str(v)) for v in values if normalize_exe(str(v))))
                 setattr(settings, key, cleaned)
+        saved = raw.get("saved_sites")
+        settings.remember_sites([str(x) for x in saved] if isinstance(saved, list) else [])
+        # 예전 설정이나 다른 경로로 모드에만 들어간 사이트도 저장한 사이트 목록에 둠
+        for profile in settings.profiles:
+            settings.remember_sites(profile.normalized_sites())
         # 즐겨찾기와 숨김은 동시에 될 수 없음 (즐겨찾기 우선)
         settings.hidden_apps = [h for h in settings.hidden_apps if h not in settings.favorite_apps]
         if settings.get_profile(settings.active_profile) is None:

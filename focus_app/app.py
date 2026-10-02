@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QDialog, QInputDialog, QMenu, QMessageBox, QSystemTrayIcon
 
 from focus_app import browser_policy, helper, taskmgr_lock, unlock, updater, winapi
 from focus_app.config import Profile, Settings, data_dir, site_url, split_web_app
@@ -54,6 +54,9 @@ class FocusApp:
         self.window.quit_requested.connect(self.quit)
         self.window.update_requested.connect(self.open_update)
         self.window.edit_apps_requested.connect(self.edit_apps_during_focus)
+        self.window.remove_apps_requested.connect(self.remove_apps_during_focus)
+        self.window.add_time_requested.connect(self.add_time_during_focus)
+        self.window.change_mode_requested.connect(self.change_mode_during_focus)
         self.window.open_site_requested.connect(self.open_site)
         self.window.restart_browsers_requested.connect(lambda: self.restart_browsers())
         self.window.on_hidden_to_tray = self._on_window_hidden
@@ -465,6 +468,15 @@ class FocusApp:
             return
         if not self._confirm("허용 앱 편집", length=unlock.EDIT_LENGTH):
             return
+        self._edit_allowed(remove_only=False)
+
+    def remove_apps_during_focus(self) -> None:
+        """해제 문자열 없이 지금 모드의 허용 앱·사이트를 빼기만 합니다 (더 엄격해질 뿐이라 확인 없음)."""
+        if not self.active or self._dialog_open:
+            return
+        self._edit_allowed(remove_only=True)
+
+    def _edit_allowed(self, remove_only: bool) -> None:
         session = self.session
         profile = self.settings.get_profile(session.profile) if session else None
         if session is None or profile is None:
@@ -473,7 +485,7 @@ class FocusApp:
         try:
             dlg = AllowedAppsDialog(
                 self.settings, profile, parent=self._dialog_parent(), on_settings_changed=self._safe_save_settings,
-                helper_installed=self.window.helper_installed,
+                helper_installed=self.window.helper_installed, remove_only=remove_only,
             )
             try:
                 if dlg.exec() != QDialog.DialogCode.Accepted:
@@ -486,6 +498,12 @@ class FocusApp:
         finally:
             self._dialog_open = False
         self._safe_save_settings()
+        self._apply_session_profile(session, profile)
+        log.info("집중 중 허용 앱 %s: %s -> %s, 사이트 %s", "빼기" if remove_only else "변경", profile.name, profile.normalized_apps(),
+                 profile.normalized_sites() if profile.limits_sites() else "제한 없음")
+
+    def _apply_session_profile(self, session: FocusSession, profile: Profile) -> None:
+        """바뀐 모드(또는 그 목록)를 감시·사이트 제한·진행 화면에 바로 반영합니다."""
         before = self._desired_sites()
         if self.monitor is not None:
             self.monitor.set_profile(copy.deepcopy(profile))
@@ -494,8 +512,71 @@ class FocusApp:
             self._policy_checked = 0.0
         self.window.show_running(session, profile)
         self._refresh_status()
-        log.info("집중 중 허용 앱 변경: %s -> %s, 사이트 %s", profile.name, profile.normalized_apps(),
-                 profile.normalized_sites() if profile.limits_sites() else "제한 없음")
+
+    # ------------------------------------------------- 집중 중 시간 추가·모드 변경
+    def _ask_minutes(self, title: str) -> Optional[int]:
+        minutes, ok = QInputDialog.getInt(self._dialog_parent(), title, "몇 분 더 집중할까요?", 15, 1, 1440, 5)
+        return minutes if ok else None
+
+    def _ask_mode(self, names: List[str]) -> Optional[str]:
+        name, ok = QInputDialog.getItem(self._dialog_parent(), "모드 변경", "바꿀 모드:", names, 0, False)
+        return name if ok and name else None
+
+    def _ask_yes(self, title: str, text: str) -> bool:
+        return QMessageBox.question(self._dialog_parent(), title, text) == QMessageBox.StandardButton.Yes
+
+    def add_time_during_focus(self) -> None:
+        """해제 문자열 없이 집중 시간을 늘립니다 (더 오래 집중할 뿐이라 확인 없음)."""
+        if not self.active or self._dialog_open or self.session.ends_at is None:
+            return
+        session = self.session
+        self._dialog_open = True
+        try:
+            minutes = self._ask_minutes("시간 추가")
+        finally:
+            self._dialog_open = False
+        if minutes and self.session is session and session.extend(minutes):
+            self._safe_save_session()
+            self.window.show_running(session, self._session_profile() or self.settings.current_profile())
+            self._refresh_status()
+            log.info("집중 시간 %d분 추가", minutes)
+
+    def change_mode_during_focus(self) -> None:
+        """짧은 해제 문자열(16글자)을 입력하면 집중을 끝내지 않고 다른 모드로 바꿉니다."""
+        if not self.active or self._dialog_open:
+            return
+        names = [n for n in self.settings.profile_names() if n != self.session.profile]
+        if not names:
+            return
+        if not self._confirm("모드 변경", length=unlock.EDIT_LENGTH):
+            return
+        session = self.session
+        if session is None:
+            return  # 입력하는 사이 집중이 끝났음
+        self._dialog_open = True
+        try:
+            name = self._ask_mode(names)
+            profile = self.settings.get_profile(name) if name else None
+            if profile is None:
+                return
+            minutes = None
+            if session.ends_at is not None and self._ask_yes(
+                "모드 변경", f"'{profile.name}' 모드로 바꾸면서 집중 시간도 늘릴까요?"
+            ):
+                minutes = self._ask_minutes("모드 변경 — 시간 추가")
+        finally:
+            self._dialog_open = False
+        if self.session is not session:
+            return
+        old = session.profile
+        session.profile = profile.name
+        if minutes:
+            session.extend(minutes)
+        self.settings.active_profile = profile.name
+        self._safe_save_settings()
+        self._safe_save_session()  # 도우미도 이 파일의 모드를 따라감
+        self._apply_session_profile(session, profile)
+        log.info("집중 중 모드 변경: %s -> %s%s", old, profile.name, f", {minutes}분 추가" if minutes else "")
 
     # ------------------------------------------------------------- 업데이트
     def _check_updates_in_background(self) -> None:

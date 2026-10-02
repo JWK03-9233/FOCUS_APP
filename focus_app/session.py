@@ -72,6 +72,14 @@ class FocusSession:
         self.emergency_at = now + max(1, delay_minutes) * 60
         return self.emergency_at
 
+    def extend(self, minutes: int, now: Optional[float] = None) -> bool:
+        """끝나는 시각을 minutes분 늦춥니다. '끝낼 때까지'면 늘릴 시간이 없어 False."""
+        if self.ends_at is None or minutes <= 0:
+            return False
+        now = time.time() if now is None else now
+        self.ends_at = max(self.ends_at, now) + minutes * 60
+        return True
+
     def cancel_emergency(self) -> None:
         self.emergency_at = None
 

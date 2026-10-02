@@ -1,6 +1,9 @@
-"""집중 중에 지금 모드의 허용 앱·사이트 목록만 고치는 대화상자 (해제 문자열을 입력한 뒤에만 열림).
+"""집중 중에 지금 모드의 허용 앱·사이트 목록만 고치는 대화상자.
 
-타이머와 차단은 그대로 계속되며, 저장하면 바뀐 목록이 즉시 적용됩니다.
+- 편집: 해제 문자열을 입력한 뒤에만 열림. 추가·빼기 모두 가능.
+- 빼기만(``remove_only``): 해제 문자열 없이 열림. 지금 허용된 앱·사이트를 빼기만 할 수 있음.
+
+타이머와 차단은 그대로 계속되며, 저장하면 바뀐 목록이 즉시 적용되고 모드에도 저장됩니다.
 """
 
 from __future__ import annotations
@@ -34,15 +37,17 @@ class AllowedAppsDialog(QDialog):
         parent: QWidget | None = None,
         on_settings_changed: Optional[Callable[[], None]] = None,
         helper_installed: Optional[bool] = None,
+        remove_only: bool = False,
     ) -> None:
         super().__init__(parent)
         self.settings = settings
+        self.remove_only = remove_only
         self._on_settings_changed = on_settings_changed
         self.profile_name = profile.name
         self._apps: List[str] = profile.normalized_apps()  # 저장 전까지는 복사본만 고침
         self._new_entries: Dict[str, AppEntry] = {}
         self._helper_installed = helper_installed
-        self.setWindowTitle("허용 앱·사이트 편집")
+        self.setWindowTitle("허용 앱·사이트 빼기" if remove_only else "허용 앱·사이트 편집")
         self.setMinimumSize(500, 600)
 
         layout = scroll_layout(self)  # 내용이 많으면 창 전체를 스크롤
@@ -50,7 +55,10 @@ class AllowedAppsDialog(QDialog):
         title = QLabel(f"<b>{profile.name}</b> 모드의 허용 앱과 사이트")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
-        hint = QLabel("집중은 그대로 계속됩니다. 저장하면 바뀐 목록이 바로 적용됩니다.")
+        hint = QLabel(
+            "집중은 그대로 계속됩니다. 저장하면 바뀐 목록이 바로 적용됩니다."
+            + (" 여기서는 빼기만 할 수 있습니다." if remove_only else "")
+        )
         hint.setObjectName("muted")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -62,6 +70,7 @@ class AllowedAppsDialog(QDialog):
         add = QPushButton("+  앱 추가")
         add.setObjectName("secondary")
         add.clicked.connect(self._add)
+        add.setVisible(not remove_only)
         head.addWidget(add)
         layout.addLayout(head)
 
@@ -71,7 +80,8 @@ class AllowedAppsDialog(QDialog):
         layout.addWidget(self.list, 3)
 
         self.sites = SiteEditor()
-        self.sites.set_values(profile.restrict_sites, profile.normalized_sites())
+        self.sites.set_values(profile.restrict_sites, profile.normalized_sites(), settings.saved_sites)
+        self.sites.set_remove_only(remove_only)
         layout.addWidget(self.sites, 2)
 
         buttons = QHBoxLayout()
@@ -135,6 +145,8 @@ class AllowedAppsDialog(QDialog):
             self._on_settings_changed()
 
     def add_entries(self, entries: List[AppEntry]) -> None:
+        if self.remove_only:
+            return
         for e in entries:
             exe = normalize_exe(e.exe)
             if exe and exe not in self._apps:
@@ -156,9 +168,20 @@ class AllowedAppsDialog(QDialog):
         profile = settings.get_profile(self.profile_name)
         if profile is None:
             raise ValueError(f"모드를 찾을 수 없습니다: {self.profile_name}")
+        if self.remove_only:
+            # 빼기만: 원래 목록에 있던 것만 남김 (어떤 경로로도 추가되지 않게 한 번 더 확인)
+            before_apps, before_sites = profile.normalized_apps(), profile.normalized_sites()
+            profile.allowed_apps = [a for a in self._apps if a in before_apps]
+            profile.allowed_sites = [s for s in self.sites.sites if s in before_sites]
+            return profile
         profile.allowed_apps = list(self._apps)
         profile.restrict_sites = self.sites.restrict
         profile.allowed_sites = list(self.sites.sites)
+        gone = [s for s in settings.saved_sites if s not in self.sites.library]
+        settings.saved_sites = list(self.sites.library)
+        for other in settings.profiles:
+            for site in gone:
+                other.remove_site(site)
         for exe, e in self._new_entries.items():
             if exe in self._apps:
                 settings.remember_app(exe, e.name, e.path)

@@ -9,7 +9,7 @@ import time
 from typing import List, Optional
 
 from PySide6.QtCore import QByteArray, QEvent, QObject, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QColor, QKeyEvent, QPainter
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QKeyEvent, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -226,6 +227,9 @@ class MainWindow(QMainWindow):
     quit_requested = Signal()
     update_requested = Signal()
     edit_apps_requested = Signal()  # 집중 중 허용 앱 편집 (해제 문자열 필요)
+    remove_apps_requested = Signal()  # 집중 중 허용 앱·사이트 빼기만 (해제 문자열 없이)
+    add_time_requested = Signal()  # 집중 중 시간 추가 (해제 문자열 없이)
+    change_mode_requested = Signal()  # 집중 중 모드 변경 (짧은 해제 문자열 필요)
     open_site_requested = Signal(str)  # 진행 화면에서 허용 사이트를 눌렀을 때 (사이트 주소)
     restart_browsers_requested = Signal()  # 사이트 제한을 적용하려고 브라우저 다시 시작
 
@@ -407,6 +411,7 @@ class MainWindow(QMainWindow):
         self.list_pages.addWidget(apps_page)
         self.site_editor = SiteEditor()
         self.site_editor.changed.connect(self._on_sites_changed)
+        self.site_editor.library_changed.connect(self._on_site_library_changed)
         self.list_pages.addWidget(self.site_editor)
         rl.addWidget(self.list_pages, 1)
         body.addWidget(right, 1)
@@ -529,7 +534,7 @@ class MainWindow(QMainWindow):
         if not p.block_everything:
             self._show_list_tab(0)
         self._update_sites_title(p)
-        self.site_editor.set_values(p.restrict_sites, p.normalized_sites())
+        self.site_editor.set_values(p.restrict_sites, p.normalized_sites(), self.settings.saved_sites)
         self.site_editor.set_context(p.normalized_apps(), self.helper_installed)
 
     def _update_sites_title(self, p: Profile) -> None:
@@ -560,6 +565,16 @@ class MainWindow(QMainWindow):
         self._update_sites_title(p)
         self._refresh_mode_item()
         self._update_start_summary()
+
+    def _on_site_library_changed(self) -> None:
+        library = list(self.site_editor.library)
+        gone = [s for s in self.settings.saved_sites if s not in library]
+        self.settings.saved_sites = library
+        # 저장한 목록에서 지운 사이트는 다른 모드에서도 뺌 (안 그러면 다음에 다시 나타남)
+        for profile in self.settings.profiles:
+            for site in gone:
+                profile.remove_site(site)
+        self.settings_changed.emit()
 
     def _reload_apps(self) -> None:
         p = self.current_mode()
@@ -685,7 +700,9 @@ class MainWindow(QMainWindow):
             profile.add_app(e.exe)
             self.settings.remember_app(e.exe, e.name, e.path)
         # 웹 앱(Google Keep 등)은 사이트 제한을 켜면 그 주소도 허용해야 열림 -> 허용 사이트에 미리 넣음
-        profile.allowed_sites += web_apps.sites_for_new_apps([e.exe for e in entries], profile.normalized_sites())
+        extra = web_apps.sites_for_new_apps([e.exe for e in entries], profile.normalized_sites())
+        profile.allowed_sites += extra
+        self.settings.remember_sites(extra)
         self.settings_changed.emit()
         self._refresh_mode_item()
         self._reload_apps()
@@ -954,12 +971,35 @@ class MainWindow(QMainWindow):
         root.addSpacing(10)
         self.end_hint = _label("", "hint", wrap=True)
         buttons.addWidget(self.end_hint, 1)
-        self.edit_apps_btn = QPushButton("허용 앱 편집…")
-        self.edit_apps_btn.setObjectName("linkButton")
-        self.edit_apps_btn.setToolTip("해제 문자열을 입력하면 집중을 끝내지 않고 허용 앱 목록만 고칠 수 있습니다")
-        self.edit_apps_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.edit_apps_btn.clicked.connect(self.edit_apps_requested.emit)
-        buttons.addWidget(self.edit_apps_btn)
+        # 집중 중에 고칠 수 있는 것들은 톱니바퀴 메뉴 하나에 모음 (버튼이 늘어서면 지저분해서)
+        self.run_menu = QMenu(self)  # 창이 소유하므로 따로 지울 필요 없음
+        self.run_menu.setToolTipsVisible(True)
+
+        def item(text: str, tip: str, signal) -> QAction:
+            action = self.run_menu.addAction(text)
+            action.setToolTip(tip)
+            action.triggered.connect(signal.emit)
+            return action
+
+        self.add_time_btn = item("시간 추가…", "해제 문자열 없이 집중 시간을 늘립니다", self.add_time_requested)
+        self.change_mode_btn = item(
+            "모드 변경…", "짧은 해제 문자열을 입력하면 집중을 끝내지 않고 다른 모드로 바꿉니다", self.change_mode_requested
+        )
+        self.run_menu.addSeparator()
+        self.edit_apps_btn = item(
+            "허용 앱 편집…", "짧은 해제 문자열을 입력하면 집중을 끝내지 않고 허용 앱 목록을 고칠 수 있습니다",
+            self.edit_apps_requested,
+        )
+        self.remove_apps_btn = item(
+            "앱·사이트 빼기…", "해제 문자열 없이 허용 앱·사이트를 목록에서 뺄 수 있습니다 (추가는 안 됨)",
+            self.remove_apps_requested,
+        )
+        self.run_menu_btn = QPushButton("⚙")
+        self.run_menu_btn.setObjectName("runMenuButton")
+        self.run_menu_btn.setToolTip("시간 추가 · 모드 변경 · 허용 앱·사이트 편집")
+        self.run_menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.run_menu_btn.setMenu(self.run_menu)
+        buttons.addWidget(self.run_menu_btn)
         self.stop_btn = QPushButton("집중 끝내기…")
         self.stop_btn.setObjectName("danger")
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1000,6 +1040,10 @@ class MainWindow(QMainWindow):
         self._show_run_sites(profile)
         self.set_site_status("", False)
         self.edit_apps_btn.setVisible(profile.block_everything)
+        self.remove_apps_btn.setVisible(profile.block_everything)
+        self.add_time_btn.setVisible(session.ends_at is not None)  # '끝낼 때까지'는 늘릴 시간이 없음
+        self.change_mode_btn.setVisible(len(self.settings.profiles) > 1)
+        self.run_menu_btn.setVisible(any(a.isVisible() for a in self.run_menu.actions() if not a.isSeparator()))
         self.edit_apps_btn.setText("허용 앱·사이트 편집…" if profile.limits_sites() else "허용 앱 편집…")
         self.end_hint.setText(
             f"끝내려면 {self.settings.unlock_code_length}글자 랜덤 문자열을 직접 입력해야 합니다."
