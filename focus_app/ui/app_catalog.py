@@ -540,7 +540,7 @@ def find_installed_path(exe: str) -> str:
     return ""
 
 
-_LETTER_COLORS = ["#4f7cff", "#2e9e5b", "#d9822b", "#9b59b6", "#16a2b8", "#e05d7b", "#7f8c8d"]
+_LETTER_COLORS = ["#6366f1", "#8b5cf6", "#ec4899", "#f97316", "#10b981", "#06b6d4", "#3b82f6", "#64748b"]
 
 
 def letter_icon(name: str, size: int = 48) -> QIcon:

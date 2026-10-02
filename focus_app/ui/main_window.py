@@ -42,7 +42,7 @@ from focus_app.ui.app_picker import AppPickerDialog
 from focus_app.ui.preset_dialog import PresetDialog
 from focus_app.ui.scroll import ExpandedList, WindowScroll
 from focus_app.ui.site_list import SiteEditor
-from focus_app.ui.theme import ACCENT
+from focus_app.ui.theme import SUCCESS
 from focus_app.version import APP_NAME, __version__
 
 CUSTOM_ID = 100000  # 분 값(최대 1440)과 겹치지 않는 id. -1은 Qt가 "자동 지정"으로 해석해 쓰면 안 됨
@@ -157,6 +157,33 @@ class _LaunchCursorFilter(QObject):
         return False
 
 
+class _PageStack(QStackedWidget):
+    """보이는 화면의 크기만 따르는 화면 묶음.
+
+    QStackedWidget은 가장 큰 화면에 크기를 맞추므로, 앱 목록을 다 펼친 설정 화면 때문에 진행 화면 밑에 큰 빈칸과
+    쓸데없는 스크롤이 생겼습니다. 창 전체 스크롤(WindowScroll)이 묻는 크기를 지금 화면 기준으로 답합니다.
+    """
+
+    def _current(self) -> Optional[QWidget]:
+        return self.currentWidget()
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        page = self._current()
+        return page.sizeHint() if page is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        page = self._current()
+        return page.minimumSizeHint() if page is not None else super().minimumSizeHint()
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        page = self._current()
+        return page.hasHeightForWidth() if page is not None else False
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        page = self._current()
+        return page.heightForWidth(width) if page is not None else -1
+
+
 class _RunAppDelegate(QStyledItemDelegate):
     """'지금 쓸 수 있는 앱' 항목: 앱이 실행 중이면 이름 오른쪽에 작은 점 (Dock처럼)."""
 
@@ -182,7 +209,7 @@ class _RunAppDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(ACCENT))
+        painter.setBrush(QColor(SUCCESS))  # 실행 중 = 에메랄드 점
         x = text_end + 6
         y = option.rect.center().y() - self.DOT / 2 + 1
         painter.drawEllipse(int(x), int(y), self.DOT, self.DOT)
@@ -216,12 +243,13 @@ class MainWindow(QMainWindow):
         self.allow_close = False  # True면 창을 닫을 때 숨기지 않고 실제로 닫음 (종료 시)
         self.on_hidden_to_tray = None  # 창을 닫아 트레이로 숨길 때 호출할 콜백
 
-        self.stack = QStackedWidget()
+        self.stack = _PageStack()
         self.setCentralWidget(WindowScroll(self.stack))  # 내용이 화면보다 크면 창 전체를 스크롤
         self.setup_page = self._build_setup_page()
         self.running_page = self._build_running_page()
         self.stack.addWidget(self.setup_page)
         self.stack.addWidget(self.running_page)
+        self._show_page(self.setup_page)
 
         self.reload_modes(select=settings.active_profile)
         self._rebuild_chips()
@@ -873,9 +901,8 @@ class MainWindow(QMainWindow):
         cl.addWidget(self.run_apps_title)
         # 허용 앱·사이트는 스크롤 없이 모두 보여 줌 (ExpandedList가 높이를 내용에 맞춤)
         self.run_apps = ExpandedList(wrapping=True)
-        self.run_apps.setObjectName("appList")
+        self.run_apps.setObjectName("runList")  # 진행 화면용: 아이콘·글자를 크게 (theme)
         self.run_apps.setSpacing(6)
-        self.run_apps.setIconSize(QSize(20, 20))
         self.run_apps.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self.run_apps.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._run_apps_cursor = _LaunchCursorFilter(self.run_apps)
@@ -886,17 +913,16 @@ class MainWindow(QMainWindow):
         self.run_sites_title = _label("지금 열 수 있는 사이트", "sectionTitle")
         cl.addWidget(self.run_sites_title)
         self.run_sites = ExpandedList(wrapping=True)
-        self.run_sites.setObjectName("appList")
+        self.run_sites.setObjectName("runList")
         self.run_sites.setSpacing(6)
-        self.run_sites.setIconSize(QSize(18, 18))
         self.run_sites.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self.run_sites.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._run_sites_cursor = _LaunchCursorFilter(self.run_sites)
         self.run_sites.itemClicked.connect(self._on_run_site_clicked)
         cl.addWidget(self.run_sites)
-        cl.addStretch(1)
+        cl.addSpacing(6)  # 사이트 목록 바로 밑에 안내 한 줄 (남는 공간은 창 맨 아래로)
         cl.addWidget(_label("작업 표시줄, 시작 메뉴, 작업 관리자, Windows 설정은 항상 쓸 수 있습니다.", "hint", True))
-        root.addWidget(card, 1)
+        root.addWidget(card)
 
         # 비상 해제 대기 띠
         self.emergency_banner = QFrame()
@@ -943,16 +969,22 @@ class MainWindow(QMainWindow):
         self.stop_btn.clicked.connect(self.stop_requested.emit)
         buttons.addWidget(self.stop_btn)
         root.addLayout(buttons)
+        root.addStretch(1)  # 창이 내용보다 크면 빈 공간은 맨 아래에
         return page
 
     # ------------------------------------------------------------- 상태 전환
+    def _show_page(self, page: QWidget) -> None:
+        """설정 화면 / 진행 화면 중 하나를 보여 줍니다 (창 크기·스크롤은 보이는 화면만 따름, _PageStack)."""
+        self.stack.setCurrentWidget(page)
+        self.stack.updateGeometry()
+
     def show_setup(self) -> None:
-        self.stack.setCurrentWidget(self.setup_page)
+        self._show_page(self.setup_page)
         self.reload_modes(select=self.settings.active_profile)
 
     def show_running(self, session: FocusSession, profile: Profile) -> None:
         self.notice.hide()
-        self.stack.setCurrentWidget(self.running_page)
+        self._show_page(self.running_page)
         self.run_mode.setText(profile.name)
         self.run_apps.clear()
         if profile.block_everything:

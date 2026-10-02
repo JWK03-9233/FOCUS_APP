@@ -45,9 +45,9 @@ _ROLE_USABLE = Qt.ItemDataRole.UserRole + 4  # 실행 파일이 있어 고를 �
 
 STAR_WIDTH = 34  # 줄 오른쪽 끝의 즐겨찾기 별 영역
 HIDE_WIDTH = 72  # 별 왼쪽의 '숨기기'/'숨김 해제' 영역
-STAR_ON = QColor("#f5b301")
-STAR_OFF = QColor("#8a8f98")
-HIDE_TEXT = QColor("#8a8f98")
+STAR_ON = QColor("#fbbf24")
+STAR_OFF = QColor("#7b8296")
+HIDE_TEXT = QColor("#7b8296")
 
 
 def star_rect(row: QRect) -> QRect:

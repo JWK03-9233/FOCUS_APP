@@ -988,3 +988,25 @@ def test_app_row_labels_get_their_full_height(qapp):
         w.hide()
     finally:
         qapp.setStyleSheet("")
+
+
+def test_running_page_height_follows_its_own_content(qapp):
+    """설정 화면의 긴 앱 목록 때문에 진행 화면 밑에 빈칸·스크롤이 생기지 않음."""
+    s, w = make_window(qapp)
+    p = s.current_profile()
+    p.block_everything = True
+    p.allowed_apps = [f"app{i}.exe" for i in range(30)]  # 설정 화면은 아주 길어짐
+    w._show_mode()
+    w.show()
+    w.resize(1000, 800)
+    w.show_running(FocusSession.start(p.name, 30), p)
+    qapp.processEvents()
+    scroll = w.centralWidget()
+    assert scroll.verticalScrollBar().maximum() == 0  # 진행 화면은 창에 다 들어감
+    # 사이트 목록·안내 바로 밑에 끝내기 버튼 (카드가 창 높이만큼 늘어나지 않음)
+    hint_bottom = w.stop_btn.mapTo(w.running_page, w.stop_btn.rect().bottomLeft()).y()
+    assert hint_bottom < w.running_page.height() - 50
+    w.show_setup()
+    qapp.processEvents()
+    assert scroll.verticalScrollBar().maximum() > 0  # 설정 화면은 길어서 창 전체 스크롤
+    w.hide()

@@ -46,7 +46,7 @@ def test_stylesheet_scales_text_and_spacing_but_not_hairlines():
     assert "QWidget { font-size: 12.8pt; }" in big  # 기본 8.5pt
     assert "padding: 15px 39px" in big  # 시작 버튼 여백 (기본 10px 26px)
     assert "border: 1px solid" in big  # 1px 선은 그대로
-    assert "#2e9e5b" in big  # 색은 건드리지 않음
+    assert theme.ACCENT in big and "stop:1 #8b5cf6" in big  # 색·그라데이션은 건드리지 않음
     assert "font-size: 6.8pt" in theme.build_stylesheet(80)
 
 

@@ -121,6 +121,9 @@ def main() -> int:
     app.setApplicationDisplayName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)  # 창이 모두 닫혀도 트레이에 남음
     app.setWindowIcon(icons.app_icon())  # 모든 창·대화상자의 기본 아이콘
+    from focus_app.ui import theme
+
+    theme.apply_palette(app)  # 앱 고유 색 (다크/라이트는 Windows 설정을 따름)
 
     lock = QLockFile(str(data_dir() / "focus_app.lock"))
     lock.setStaleLockTime(0)

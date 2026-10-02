@@ -8,11 +8,13 @@ from typing import Optional
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 
+from focus_app.ui import theme
+
 ICON_PATH = Path(__file__).resolve().parent.parent / "assets" / "focus_icon.ico"
 
-COLOR_IDLE = QColor("#8a8f98")
-COLOR_ACTIVE = QColor("#2e9e5b")
-COLOR_EMERGENCY = QColor("#d9822b")
+COLOR_IDLE = QColor("#7b8296")
+COLOR_ACTIVE = QColor(theme.ACCENT)
+COLOR_EMERGENCY = QColor(theme.WARN)
 
 _base_pixmap: Optional[QPixmap] = None
 

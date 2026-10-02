@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from focus_app.unlock import UnlockChallenge
+from focus_app.ui import theme
 from focus_app.ui.scroll import scroll_layout
 
 
@@ -104,7 +105,7 @@ class UnlockDialog(QDialog):
         layout.addWidget(self.counter)
 
         self.status = QLabel("")
-        self.status.setStyleSheet("color: #c0392b;")
+        self.status.setStyleSheet(f"color: {theme.DANGER};")
         layout.addWidget(self.status)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
