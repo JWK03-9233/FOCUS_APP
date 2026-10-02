@@ -98,6 +98,14 @@ def main() -> int:
         from focus_app.helper import register_here
 
         return register_here()
+    if "--release-locks" in sys.argv[1:]:
+        # 제거 프로그램이 관리자 권한으로 실행: 작업 관리자 끄기·사이트 제한을 원래대로 돌리고 끝냄
+        _apply_data_dir(sys.argv[1:])
+        _setup_logging("helper.log")
+        from focus_app import browser_policy, taskmgr_lock
+
+        ok = taskmgr_lock.release(data_dir()) & browser_policy.release(data_dir())
+        return 0 if ok else 1
     _apply_data_dir(sys.argv[1:])
     _setup_logging()
     _install_exception_hooks()

@@ -5,14 +5,15 @@ from __future__ import annotations
 import copy
 import logging
 import time
-from typing import Optional
+from typing import List, Optional, Tuple
 
+import shiboken6
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QDialog, QMenu, QMessageBox, QSystemTrayIcon
 
-from focus_app import helper, taskmgr_lock, updater, winapi
-from focus_app.config import Settings, data_dir
+from focus_app import browser_policy, helper, taskmgr_lock, updater, winapi
+from focus_app.config import Profile, Settings, data_dir, site_url
 from focus_app.enforcer import ForegroundWindow
 from focus_app.monitor import AllowlistMonitor
 from focus_app.session import FocusSession, format_duration
@@ -27,6 +28,8 @@ from focus_app.ui.update_dialog import UpdateDialog, _Bridge, _safe_emit, run_in
 from focus_app.version import APP_NAME, __version__
 
 log = logging.getLogger(__name__)
+
+POLICY_APPLY_WAIT = 15.0  # 초. 사이트 제한이 이만큼 안 걸리면 도우미가 일을 못 하는 것으로 보고 알림
 
 
 class FocusApp:
@@ -52,6 +55,8 @@ class FocusApp:
         self.window.quit_requested.connect(self.quit)
         self.window.update_requested.connect(self.open_update)
         self.window.edit_apps_requested.connect(self.edit_apps_during_focus)
+        self.window.open_site_requested.connect(self.open_site)
+        self.window.restart_browsers_requested.connect(lambda: self.restart_browsers())
         self.window.on_hidden_to_tray = self._on_window_hidden
 
         # --- 트레이
@@ -80,13 +85,24 @@ class FocusApp:
         self._warned_elevated = False
         self._end_popup: Optional[FocusEndDialog] = None
 
+        # --- 사이트 제한 (도우미가 쓴 브라우저 정책의 상태를 표시 파일에서 읽음)
+        # 작업 스레드는 결과를 여기에 두기만 하고, 화면 반영은 UI 스레드의 상태 타이머가 함 (_take_worker_results)
+        self._helper_check_result: Optional[bool] = None
+        self._restart_result: Optional[list] = None  # 다시 시작하지 못한 브라우저 이름 목록
+        self._policy_state: Optional[Tuple[List[str], float]] = None  # (적용된 사이트, 적용 시각)
+        self._policy_checked = 0.0
+        self._sites_since = 0.0  # 사이트 제한을 요청한 때 (적용이 너무 늦으면 알림)
+        self._restarting = False  # 브라우저를 다시 시작하는 중
+        self._gate_noticed = False  # 이번 집중에서 브라우저를 막은 이유를 창으로 알렸는지
+        self._check_helper_installed()
+
         self._update_bridge = _Bridge(app)
         self._update_bridge.checked.connect(self._on_update_checked)
         self._latest: Optional[updater.ReleaseInfo] = None
 
         self._resume_saved_session()
-        if self.session is None and taskmgr_lock.engaged(data_dir()):
-            self._start_helper()  # 지난번에 꺼 둔 작업 관리자를 도우미가 되돌리게 함
+        if self.session is None and self._locks_engaged():
+            self._start_helper()  # 지난번에 꺼 둔 작업 관리자·사이트 제한을 도우미가 되돌리게 함
         self._refresh_status()
         if show_window:
             self.show_window()
@@ -160,6 +176,18 @@ class FocusApp:
             action.triggered.connect(lambda _=False, e=exe: self.launch_app(e))
             self.menu.insertAction(before, action)
             self._app_actions.append(action)
+        sites = self._desired_sites()
+        if sites:
+            header = QAction("지금 열 수 있는 사이트", self.menu)
+            header.setEnabled(False)
+            self.menu.insertAction(before, header)
+            self._app_actions.append(header)
+            globe = icons.globe_icon()
+            for site in sites:
+                action = QAction(globe, f"   {site.lstrip('.')}", self.menu)
+                action.triggered.connect(lambda _=False, st=site: self.open_site(st))
+                self.menu.insertAction(before, action)
+                self._app_actions.append(action)
 
     def launch_app(self, exe: str) -> None:
         """허용 앱을 엽니다 (진행 화면의 앱 아이콘이나 트레이 메뉴에서)."""
@@ -186,6 +214,7 @@ class FocusApp:
         return self.session is not None
 
     def _refresh_status(self) -> None:
+        self._take_worker_results()
         if self.session is None:
             text = "대기 중"
             tip = f"{APP_NAME} - 대기 중"
@@ -209,8 +238,9 @@ class FocusApp:
             else:
                 self._set_icon("active")
             self.window.update_running(s, blocked)
-            if self.window.isVisible():  # 창이 보일 때만 확인 (실행 중인 앱 옆에 점)
+            if self.window.isVisible():  # 창이 보일 때만 확인 (실행 중인 앱 옆에 점, 사이트 제한 상태)
                 self.window.set_open_apps(winapi.running_exe_names())
+                self._refresh_site_status()
         self.status_action.setText(text)
         self.tray.setToolTip(tip)
         pending = self.active and self.session.emergency_at is not None
@@ -245,7 +275,12 @@ class FocusApp:
             on_block=self._on_block,
             handles=self._main_handles,
             on_block_failed=self._on_block_failed,
+            gate=self._browser_gate,
         )
+        self._policy_state = None
+        self._policy_checked = 0.0
+        self._sites_since = time.monotonic()
+        self._gate_noticed = False
         self._start_helper()
         self.poll_timer.start(self.settings.poll_interval_ms)
         self.window.show_running(session, profile)
@@ -262,12 +297,14 @@ class FocusApp:
         if self.session is None:
             return
         session, monitor = self.session, self.monitor
+        had_sites = self._desired_sites() is not None
         self.poll_timer.stop()
         self.monitor = None
         self.session = None
+        self._policy_state = None
         FocusSession.clear()
-        if taskmgr_lock.engaged(data_dir()):
-            self._start_helper()  # 도우미가 꺼져 있었다면 띄워서 작업 관리자를 되돌리게 함
+        if self._locks_engaged():
+            self._start_helper()  # 도우미가 꺼져 있었다면 띄워서 작업 관리자·사이트 제한을 되돌리게 함
         self._refresh_status()
 
         focused = session.elapsed_seconds()
@@ -282,7 +319,17 @@ class FocusApp:
             "emergency": "비상 해제가 적용되어 집중이 끝났습니다.",
         }.get(reason, "집중이 끝났습니다.")
         self.window.show_setup()
-        self.window.show_notice(f"<b>{msg}</b>  {summary}")
+        browsers = self._running_browsers() if had_sites else []
+        if browsers:
+            # 브라우저는 정책을 시작할 때와 15분마다만 읽으므로, 그대로 두면 잠시 사이트가 계속 막혀 있음
+            names = ", ".join(browser_policy.browser_name(e) for e in browsers)
+            self.window.show_notice(
+                f"<b>{msg}</b>  {summary}<br>{names}은(는) 다시 시작하면 모든 사이트가 바로 열립니다 "
+                "(그대로 두면 15분 안에 풀림).",
+                "브라우저 다시 시작", self._restart_after_release,
+            )
+        else:
+            self.window.show_notice(f"<b>{msg}</b>  {summary}")
         if reason != "manual":
             # 직접 끝낸 게 아니면 놓치지 않게: 창을 앞으로 가져오고, 닫을 때까지 떠 있는 알림 창을 띄움.
             # 집중 중에 최소화된 앱들은 그대로 둠 (한꺼번에 다시 열지 않음)
@@ -317,12 +364,43 @@ class FocusApp:
             if not self._helper_ok and self._helper_installed and now - self._helper_started >= 10.0:
                 log.info("도우미가 꺼져 있어 다시 띄웁니다.")
                 self._start_helper(check_registered=False)
+        if now - self._policy_checked >= 1.0:
+            self._policy_checked = now
+            self._policy_state = browser_policy.applied(data_dir()) if self._desired_sites() is not None else None
         self.monitor.poll()
 
     # ------------------------------------------------------ 관리자 권한 도우미
     def _main_handles(self, window: ForegroundWindow) -> bool:
         """본 앱이 맡을 창: 도우미가 감시 중이면 관리자 권한 창은 도우미에게 맡김."""
         return not (self._helper_ok and winapi.process_elevated(window.pid))
+
+    def _locks_engaged(self) -> bool:
+        """도우미가 바꿔 둔 설정(작업 관리자 끄기, 사이트 제한)이 남아 있는지."""
+        return taskmgr_lock.engaged(data_dir()) or browser_policy.engaged(data_dir())
+
+    def _check_helper_installed(self) -> None:
+        def work() -> None:
+            try:
+                self._helper_check_result = helper.is_registered()
+            except Exception:  # noqa: BLE001
+                log.exception("도우미 설치 여부 확인 실패")
+
+        run_in_thread(work, "helper-check")
+
+    def _take_worker_results(self) -> None:
+        """작업 스레드가 남긴 결과를 화면에 반영합니다 (UI 스레드에서만 호출)."""
+        if not shiboken6.isValid(self.window):
+            return  # 창이 이미 지워짐 (테스트 등에서 컨트롤러만 남은 경우)
+        installed, self._helper_check_result = self._helper_check_result, None
+        if installed is not None:
+            self._on_helper_installed(installed)
+        failed, self._restart_result = self._restart_result, None
+        if failed is not None:
+            self._on_restart_done(failed)
+
+    def _on_helper_installed(self, installed: bool) -> None:
+        self._helper_installed = installed
+        self.window.set_helper_installed(installed)
 
     def _start_helper(self, check_registered: bool = True) -> None:
         self._helper_started = time.monotonic()
@@ -331,6 +409,7 @@ class FocusApp:
             try:
                 if check_registered:
                     self._helper_installed = helper.is_registered()
+                    self._helper_check_result = self._helper_installed
                 if self._helper_installed and helper.start(check_registered=False):
                     log.info("관리자 권한 도우미 실행 요청")
             except Exception:  # noqa: BLE001
@@ -355,6 +434,9 @@ class FocusApp:
         self.tray.showMessage(APP_NAME, msg, QSystemTrayIcon.MessageIcon.Warning, 5000)
 
     def _on_block(self, window: ForegroundWindow) -> None:
+        if self._is_gated_browser(window):
+            self._on_browser_gated(window)
+            return
         if self.settings.show_block_notifications:
             self.tray.showMessage(
                 APP_NAME,
@@ -377,7 +459,8 @@ class FocusApp:
         self._dialog_open = True
         try:
             dlg = AllowedAppsDialog(
-                self.settings, profile, parent=self._dialog_parent(), on_settings_changed=self._safe_save_settings
+                self.settings, profile, parent=self._dialog_parent(), on_settings_changed=self._safe_save_settings,
+                helper_installed=self.window.helper_installed,
             )
             try:
                 if dlg.exec() != QDialog.DialogCode.Accepted:
@@ -390,11 +473,16 @@ class FocusApp:
         finally:
             self._dialog_open = False
         self._safe_save_settings()
+        before = self._desired_sites()
         if self.monitor is not None:
             self.monitor.set_profile(copy.deepcopy(profile))
+        if self._desired_sites() != before:
+            self._sites_since = time.monotonic()  # 도우미가 새 사이트 목록을 쓸 때까지 기다림
+            self._policy_checked = 0.0
         self.window.show_running(session, profile)
         self._refresh_status()
-        log.info("집중 중 허용 앱 변경: %s -> %s", profile.name, profile.normalized_apps())
+        log.info("집중 중 허용 앱 변경: %s -> %s, 사이트 %s", profile.name, profile.normalized_apps(),
+                 profile.normalized_sites() if profile.limits_sites() else "제한 없음")
 
     # ------------------------------------------------------------- 업데이트
     def _check_updates_in_background(self) -> None:
@@ -463,6 +551,7 @@ class FocusApp:
                 dlg.deleteLater()
         finally:
             self._dialog_open = False
+        self._check_helper_installed()  # 설정에서 도우미를 설치하거나 지웠을 수 있음
 
     def _safe_save_session(self) -> None:
         # 저장에 실패해도(동기화 프로그램이 파일을 잡고 있는 등) 차단은 계속되어야 함.
@@ -506,6 +595,200 @@ class FocusApp:
         self.window.allow_close = True
         self.window.close()  # closeEvent에서 창 위치·크기를 저장
         self.app.quit()
+
+    # ------------------------------------------------------------- 사이트 제한
+    def _session_profile(self) -> Optional[Profile]:
+        """지금 집중 중인 모드 (감시에 쓰는 복사본). 집중 중이 아니면 None."""
+        if self.session is None:
+            return None
+        if self.monitor is not None:
+            return self.monitor.profile
+        return self.settings.get_profile(self.session.profile)
+
+    def _desired_sites(self) -> Optional[List[str]]:
+        """지금 집중에 걸어야 하는 허용 사이트 (사이트 제한이 없으면 None)."""
+        return browser_policy.desired_sites(self._session_profile())
+
+    def _policy_ready(self) -> Optional[float]:
+        """원하는 사이트 목록이 브라우저 정책에 적용됐으면 그 적용 시각, 아니면 None."""
+        sites, state = self._desired_sites(), self._policy_state
+        if sites is None or state is None or state[0] != sites:
+            return None
+        return state[1]
+
+    def _allowed_browsers(self) -> List[str]:
+        profile = self._session_profile()
+        apps = profile.normalized_apps() if profile is not None else []
+        return [exe for exe in apps if exe in browser_policy.SUPPORTED_EXES]
+
+    def _browser_gate(self, window: ForegroundWindow) -> bool:
+        """허용 브라우저라도 사이트 제한이 아직 안 걸려 있으면 막음 (False)."""
+        if window.exe_name not in browser_policy.SUPPORTED_EXES or self._desired_sites() is None:
+            return True
+        applied_at = self._policy_ready()
+        if applied_at is None:
+            return False  # 도우미가 아직 정책을 못 씀 (또는 도우미가 없음): 모든 사이트가 열리므로 막음
+        return not browser_policy.needs_restart(winapi.process_start_time(window.pid), applied_at)
+
+    def _is_gated_browser(self, window: ForegroundWindow) -> bool:
+        profile = self._session_profile()
+        return (profile is not None and profile.allows(window.exe_name)
+                and window.exe_name in browser_policy.SUPPORTED_EXES)
+
+    def _on_browser_gated(self, window: ForegroundWindow) -> None:
+        name = browser_policy.browser_name(window.exe_name)
+        if self._policy_ready() is None:
+            msg = f"사이트 제한을 아직 적용하지 못해 {name}을(를) 최소화했어요."
+        else:
+            msg = f"{name}은(는) 다시 시작해야 사이트 제한이 적용돼요. FocusApp 창에서 '브라우저 다시 시작'을 누르세요."
+        self.tray.showMessage(APP_NAME, msg, QSystemTrayIcon.MessageIcon.Information, 4000)
+        if not self._gate_noticed:
+            self._gate_noticed = True
+            self.show_window()  # 다시 시작 버튼이 있는 진행 화면을 보여 줌
+
+    def _refresh_site_status(self) -> None:
+        """진행 화면의 사이트 제한 상태 띠를 갱신합니다."""
+        if self._desired_sites() is None:
+            self.window.set_site_status("", False)
+            return
+        applied_at = self._policy_ready()
+        if applied_at is None:
+            waited = time.monotonic() - self._sites_since
+            if self.window.helper_installed is False:  # 아직 확인 전이면 None
+                text = ("⚠ 관리자 권한 도우미가 없어 사이트 제한을 쓸 수 없습니다. 그동안 브라우저는 최소화됩니다. "
+                        "집중이 끝난 뒤 ⚙ 설정에서 도우미를 설치하세요.")
+            elif waited >= POLICY_APPLY_WAIT:
+                text = ("⚠ 사이트 제한을 적용하지 못하고 있습니다 (도우미 기록 helper.log 확인). "
+                        "그동안 브라우저는 최소화됩니다.")
+            else:
+                text = "사이트 제한을 적용하는 중…"
+            self.window.set_site_status(text, False)
+            return
+        if self._restarting:
+            self.window.set_site_status("브라우저를 다시 시작하는 중…", False)
+            return
+        stale = browser_policy.stale_browsers(self._allowed_browsers(), applied_at)
+        if not stale:
+            self.window.set_site_status("", False)
+            return
+        names = ", ".join(browser_policy.browser_name(e) for e in stale)
+        left = max(1, int((applied_at + browser_policy.RELOAD_INTERVAL - time.time()) // 60) + 1)
+        self.window.set_site_status(
+            f"{names}은(는) 사이트 제한을 걸기 전부터 열려 있어, 다시 시작하기 전까지 최소화됩니다 "
+            f"(그대로 두면 {left}분 안에 저절로 적용).", True,
+        )
+
+    def _browser_path(self, exe: str) -> str:
+        for pid in browser_policy.running_pids(exe):
+            path = winapi.process_image_path(pid)
+            if path:
+                return path
+        return self.settings.app_path(exe) or app_catalog.find_installed_path(exe)
+
+    def _pick_browser(self) -> Tuple[str, str]:
+        """사이트를 열 브라우저 (실행 파일, 경로): 허용한 지원 브라우저 중 실행 중인 것을 먼저. 없으면 ("", "")."""
+        browsers = self._allowed_browsers()
+        browsers.sort(key=lambda e: not browser_policy.running_pids(e))
+        for exe in browsers:
+            path = self._browser_path(exe)
+            if path:
+                return exe, path
+        return "", ""
+
+    def open_site(self, site: str) -> None:
+        """허용 사이트를 허용한 브라우저로 엽니다 (진행 화면이나 트레이 메뉴에서)."""
+        sites = self._desired_sites()
+        if sites is None or site not in sites:
+            return
+        exe, path = self._pick_browser()
+        if not exe:
+            self.tray.showMessage(APP_NAME, "사이트를 열 브라우저를 찾지 못했어요.",
+                                  QSystemTrayIcon.MessageIcon.Warning, 4000)
+            return
+        applied_at = self._policy_ready()
+        if applied_at is None:
+            self.tray.showMessage(APP_NAME, "사이트 제한을 아직 적용하지 못해 브라우저를 열 수 없어요.",
+                                  QSystemTrayIcon.MessageIcon.Warning, 4000)
+            return
+        url = site_url(site)
+        if browser_policy.stale_browsers([exe], applied_at):
+            self.restart_browsers(url=url, only=[exe])
+            return
+        if browser_policy.open_url(path, url):
+            log.info("허용 사이트 열기: %s (%s)", url, exe)
+
+    def _running_browsers(self) -> List[str]:
+        return [b.exe for b in browser_policy.BROWSERS if browser_policy.running_pids(b.exe)]
+
+    def restart_browsers(self, url: str = "", only: Optional[List[str]] = None, after_release: bool = False) -> None:
+        """브라우저를 다시 시작해 새 정책을 읽게 합니다 (확인을 받은 뒤, 열려 있던 탭은 다시 열림)."""
+        if self._restarting or self._dialog_open:
+            return
+        if after_release:
+            targets = self._running_browsers()
+        else:
+            applied_at = self._policy_ready()
+            if applied_at is None:
+                return
+            targets = only if only is not None else browser_policy.stale_browsers(self._allowed_browsers(), applied_at)
+        if not targets:
+            return
+        names = ", ".join(browser_policy.browser_name(e) for e in targets)
+        why = ("집중이 끝나 사이트 제한을 풀었습니다." if after_release
+               else "사이트 제한은 브라우저를 다시 시작해야 적용됩니다.")
+        self._dialog_open = True
+        try:
+            box = QMessageBox(QMessageBox.Icon.Question, "브라우저 다시 시작",
+                              f"{names}을(를) 다시 시작할까요?\n\n{why}\n열려 있던 탭은 다시 열리지만, "
+                              "입력하던 내용이나 받고 있던 파일은 사라질 수 있어요.", parent=self._dialog_parent())
+            restart = box.addButton("다시 시작", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(restart)
+            try:
+                box.exec()
+                if box.clickedButton() is not restart:
+                    return
+            finally:
+                box.deleteLater()
+        finally:
+            self._dialog_open = False
+        paths = {exe: self._browser_path(exe) for exe in targets}
+        self._restarting = True
+        def work() -> None:
+            failed = []
+            for i, exe in enumerate(targets):
+                try:
+                    if not browser_policy.restart_browser(exe, paths[exe], url if i == 0 else ""):
+                        failed.append(browser_policy.browser_name(exe))
+                except Exception:  # noqa: BLE001
+                    log.exception("브라우저 다시 시작 실패: %s", exe)
+                    failed.append(browser_policy.browser_name(exe))
+            self._restart_result = failed
+
+        run_in_thread(work, "browser-restart")
+        if self.session is not None:
+            self._refresh_site_status()
+
+    def _on_restart_done(self, failed: list) -> None:
+        self._restarting = False
+        if failed:
+            QMessageBox.warning(self._dialog_parent(), "브라우저 다시 시작",
+                                f"{', '.join(failed)}을(를) 다시 시작하지 못했습니다. 직접 완전히 닫았다가 다시 열어 주세요.")
+        if self.session is not None:
+            self._refresh_site_status()
+
+    def _restart_after_release(self, waited: float = 0.0) -> None:
+        """집중이 끝난 뒤: 도우미가 정책을 되돌린 다음에 브라우저를 다시 시작 (먼저 하면 제한이 남음)."""
+        if self.session is not None:
+            return
+        if browser_policy.engaged(data_dir()):
+            if waited >= 10.0:
+                QMessageBox.information(self._dialog_parent(), "브라우저 다시 시작",
+                                        "아직 사이트 제한을 푸는 중입니다. 잠시 뒤에 브라우저를 직접 다시 시작해 주세요.")
+                return
+            QTimer.singleShot(500, lambda: self._restart_after_release(waited + 0.5))
+            return
+        self.restart_browsers(after_release=True)
 
     # ------------------------------------------------------------- 공통
     def _dialog_parent(self):

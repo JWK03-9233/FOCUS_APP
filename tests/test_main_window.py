@@ -160,9 +160,7 @@ def test_controller_start_and_end_flow(qapp):
         assert ctl.window.stack.currentWidget() is ctl.window.setup_page
         assert not ctl.window.notice.isHidden()
     finally:
-        ctl.tray.hide()
-        ctl.window.allow_close = True
-        ctl.window.close()
+        _close(ctl)
 
 
 def test_preset_chips_follow_settings_and_edit(qapp):
@@ -226,6 +224,9 @@ def _controller(qapp):
 
 
 def _close(ctl):
+    # 타이머를 멈춰 두지 않으면 테스트가 끝난 뒤에도 남은 컨트롤러가 계속 돌며 다음 테스트를 방해함
+    ctl.poll_timer.stop()
+    ctl.status_timer.stop()
     ctl.tray.hide()
     ctl.window.allow_close = True
     ctl.window.close()

@@ -40,6 +40,7 @@ QLabel#sectionTitle {{ font-size: 11pt; font-weight: 600; }}
 QLabel#modeTitle {{ font-size: 15pt; font-weight: 600; }}
 QLabel#muted {{ color: palette(placeholder-text); }}
 QLabel#hint {{ color: palette(placeholder-text); font-size: 9pt; }}
+QLabel#warnText {{ color: {WARN}; font-size: 9pt; }}
 QLabel#timer {{ font-size: 54pt; font-weight: 300; }}
 QLabel#runningMode {{ font-size: 17pt; font-weight: 600; color: {ACCENT}; }}
 QLabel#modeRowTitle {{ font-size: 11pt; font-weight: 600; background: transparent; }}

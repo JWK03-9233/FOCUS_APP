@@ -69,3 +69,21 @@ def active_icon() -> QIcon:
 
 def emergency_icon() -> QIcon:
     return _with_dot(COLOR_EMERGENCY)
+
+
+def globe_icon(size: int = 40) -> QIcon:
+    """허용 사이트 목록에 쓰는 지구본 아이콘 (선 몇 개로 그림)."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(COLOR_ACTIVE, size * 0.07)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    m = size * 0.1
+    r = QRectF(m, m, size - 2 * m, size - 2 * m)
+    p.drawEllipse(r)
+    p.drawEllipse(QRectF(r.center().x() - r.width() * 0.22, r.top(), r.width() * 0.44, r.height()))
+    p.drawLine(int(r.left()), int(r.center().y()), int(r.right()), int(r.center().y()))
+    p.end()
+    return QIcon(pm)

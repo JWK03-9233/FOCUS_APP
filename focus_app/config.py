@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
@@ -93,11 +94,59 @@ def friendly_name(exe_name: str) -> str:
     return stem[:1].upper() + stem[1:] if stem else exe
 
 
+# 사이트 주소의 호스트 부분에 쓸 수 있는 글자 (국제화 도메인은 브라우저처럼 punycode로 바꿔 저장)
+_HOST_RE = re.compile(r"^\.?[a-z0-9-]+(\.[a-z0-9-]+)*(:\d{1,5})?$")
+
+
+def normalize_site(text: str) -> str:
+    """사용자가 넣은 사이트 주소를 저장·비교용으로 정리합니다. 쓸 수 없는 주소면 빈 문자열.
+
+    * ``https://www.Notion.so/`` -> ``notion.so`` (스킴, 끝의 /, 맨 앞 www. 제거, 소문자)
+    * ``docs.google.com/document`` -> 그대로 (경로까지 지정 가능)
+    * ``.notion.so`` -> 그대로 (앞의 점 = 하위 도메인 없이 그 주소만)
+    * ``*.notion.so`` -> ``notion.so`` (점 없이 적으면 원래 하위 도메인까지 포함)
+    """
+    text = (text or "").strip()
+    text = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", "", text)
+    if not text or any(c.isspace() for c in text):
+        return ""
+    text = text.split("#", 1)[0].split("?", 1)[0]
+    host, sep, path = text.partition("/")
+    host = host.lower().rstrip(".")
+    if "@" in host:
+        return ""
+    exact = host.startswith(".")
+    host = host.lstrip(".")
+    if host.startswith("*."):
+        host = host[2:]
+    if host.startswith("www.") and host.count(".") >= 2:
+        host = host[4:]
+    try:
+        host = host.encode("idna").decode("ascii") if not host.isascii() else host
+    except UnicodeError:
+        return ""
+    if "." not in host.split(":")[0] and host.split(":")[0] != "localhost":
+        return ""
+    host = ("." if exact else "") + host
+    if not _HOST_RE.match(host):
+        return ""
+    path = path.rstrip("/")
+    return host + ("/" + path if sep and path else "")
+
+
+def site_url(site: str) -> str:
+    """사이트 항목을 브라우저에서 열 주소로 (예: "notion.so" -> "https://notion.so")."""
+    return "https://" + site.lstrip(".")
+
+
 @dataclass
 class Profile:
     name: str
     allowed_apps: List[str] = field(default_factory=list)  # 실행 파일 이름 (예: "code.exe")
     block_everything: bool = True  # False면 이 프로필에서는 차단하지 않음 (자유 시간)
+    # True면 브라우저(Chrome·Edge 등)에서 allowed_sites만 열 수 있음 (focus_app.browser_policy)
+    restrict_sites: bool = False
+    allowed_sites: List[str] = field(default_factory=list)  # normalize_site로 정리한 주소 (예: "notion.so")
 
     def normalized_apps(self) -> List[str]:
         seen: List[str] = []
@@ -122,6 +171,25 @@ class Profile:
     def remove_app(self, exe_name: str) -> None:
         n = normalize_exe(exe_name)
         self.allowed_apps = [a for a in self.allowed_apps if normalize_exe(a) != n]
+
+    def normalized_sites(self) -> List[str]:
+        return list(dict.fromkeys(s for s in (normalize_site(x) for x in self.allowed_sites) if s))
+
+    def limits_sites(self) -> bool:
+        """집중 중 브라우저에서 고른 사이트만 열게 하는 모드인지."""
+        return self.block_everything and self.restrict_sites
+
+    def add_site(self, text: str) -> str:
+        """사이트를 추가하고 정리된 주소를 돌려줍니다. 쓸 수 없는 주소면 ValueError."""
+        site = normalize_site(text)
+        if not site:
+            raise ValueError(f"사이트 주소로 쓸 수 없습니다: {text.strip()}")
+        if site not in self.normalized_sites():
+            self.allowed_sites.append(site)
+        return site
+
+    def remove_site(self, site: str) -> None:
+        self.allowed_sites = [s for s in self.allowed_sites if normalize_site(s) != site]
 
 
 def default_profiles() -> List[Profile]:
@@ -286,6 +354,11 @@ class Settings:
                         name=str(item["name"]),
                         allowed_apps=[str(a) for a in apps if str(a).strip()],
                         block_everything=bool(item.get("block_everything", True)),
+                        restrict_sites=bool(item.get("restrict_sites", False)),
+                        allowed_sites=[
+                            normalize_site(str(x)) for x in (item.get("allowed_sites") or [])
+                            if normalize_site(str(x))
+                        ],
                     )
                 )
             if profiles:

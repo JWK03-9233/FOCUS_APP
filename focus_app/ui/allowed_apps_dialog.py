@@ -1,4 +1,4 @@
-"""집중 중에 지금 모드의 허용 앱 목록만 고치는 대화상자 (해제 문자열을 입력한 뒤에만 열림).
+"""집중 중에 지금 모드의 허용 앱·사이트 목록만 고치는 대화상자 (해제 문자열을 입력한 뒤에만 열림).
 
 타이머와 차단은 그대로 계속되며, 저장하면 바뀐 목록이 즉시 적용됩니다.
 """
@@ -24,6 +24,7 @@ from focus_app.ui import app_catalog, theme
 from focus_app.ui.app_catalog import AppEntry
 from focus_app.ui.app_picker import AppPickerDialog
 from focus_app.ui.main_window import AppRow
+from focus_app.ui.site_list import SiteEditor
 
 
 class AllowedAppsDialog(QDialog):
@@ -33,6 +34,7 @@ class AllowedAppsDialog(QDialog):
         profile: Profile,
         parent: QWidget | None = None,
         on_settings_changed: Optional[Callable[[], None]] = None,
+        helper_installed: Optional[bool] = None,
     ) -> None:
         super().__init__(parent)
         self.settings = settings
@@ -40,12 +42,13 @@ class AllowedAppsDialog(QDialog):
         self.profile_name = profile.name
         self._apps: List[str] = profile.normalized_apps()  # 저장 전까지는 복사본만 고침
         self._new_entries: Dict[str, AppEntry] = {}
-        self.setWindowTitle("허용 앱 편집")
-        self.setMinimumSize(460, 480)
+        self._helper_installed = helper_installed
+        self.setWindowTitle("허용 앱·사이트 편집")
+        self.setMinimumSize(500, 600)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
-        title = QLabel(f"<b>{profile.name}</b> 모드의 허용 앱")
+        title = QLabel(f"<b>{profile.name}</b> 모드의 허용 앱과 사이트")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
         hint = QLabel("집중은 그대로 계속됩니다. 저장하면 바뀐 목록이 바로 적용됩니다.")
@@ -66,7 +69,11 @@ class AllowedAppsDialog(QDialog):
         self.list = QListWidget()
         self.list.setObjectName("appList")
         self.list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
-        layout.addWidget(self.list, 1)
+        layout.addWidget(self.list, 3)
+
+        self.sites = SiteEditor()
+        self.sites.set_values(profile.restrict_sites, profile.normalized_sites())
+        layout.addWidget(self.sites, 2)
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
@@ -91,6 +98,7 @@ class AllowedAppsDialog(QDialog):
     def _reload(self) -> None:
         self.list.clear()
         self.count.setText(f"쓸 수 있는 앱 ({len(self._apps)}개)")
+        self.sites.set_context(self._apps, self._helper_installed)
         for exe in self._apps:
             row = AppRow(self._name(exe), exe, self._path(exe), self.remove_app)
             item = QListWidgetItem()
@@ -149,6 +157,8 @@ class AllowedAppsDialog(QDialog):
         if profile is None:
             raise ValueError(f"모드를 찾을 수 없습니다: {self.profile_name}")
         profile.allowed_apps = list(self._apps)
+        profile.restrict_sites = self.sites.restrict
+        profile.allowed_sites = list(self.sites.sites)
         for exe, e in self._new_entries.items():
             if exe in self._apps:
                 settings.remember_app(exe, e.name, e.path)

@@ -18,6 +18,7 @@ SW_MINIMIZE = 6
 SW_RESTORE = 9
 GA_ROOTOWNER = 3
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+PROCESS_TERMINATE = 0x0001
 GW_OWNER = 4
 WS_EX_TOOLWINDOW = 0x00000080
 TOKEN_QUERY = 0x0008
@@ -104,6 +105,10 @@ if IS_WINDOWS:  # pragma: no cover - Windows 전용
     kernel32.Process32FirstW.restype = wintypes.BOOL
     kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
     kernel32.Process32NextW.restype = wintypes.BOOL
+    kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateProcess.restype = wintypes.BOOL
 
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
@@ -382,24 +387,70 @@ class _ProcessEntry(ctypes.Structure):  # PROCESSENTRY32W
     ]
 
 
-def running_exe_names() -> set:
-    """지금 실행 중인 프로세스의 실행 파일 이름들 (소문자). 관리자 권한 프로세스도 포함됩니다."""
+def _process_entries() -> List[tuple]:
+    """지금 실행 중인 프로세스의 (pid, 소문자 실행 파일 이름) 목록. 관리자 권한 프로세스도 포함됩니다."""
     if not IS_WINDOWS:
-        return set()
+        return []
     snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)  # pragma: no cover
     if not snap or snap == wintypes.HANDLE(-1).value:  # pragma: no cover
-        return set()
-    names = set()  # pragma: no cover
+        return []
+    out = []  # pragma: no cover
     try:  # pragma: no cover
         entry = _ProcessEntry()
         entry.dwSize = ctypes.sizeof(_ProcessEntry)
         ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
         while ok:
-            names.add(entry.szExeFile.lower())
+            out.append((int(entry.th32ProcessID), entry.szExeFile.lower()))
             ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
     finally:  # pragma: no cover
         kernel32.CloseHandle(snap)
-    return names
+    return out
+
+
+def running_exe_names() -> set:
+    """지금 실행 중인 프로세스의 실행 파일 이름들 (소문자). 관리자 권한 프로세스도 포함됩니다."""
+    return {name for _pid, name in _process_entries()}
+
+
+def process_ids(exe_name: str) -> List[int]:
+    """이 실행 파일(소문자 이름)로 실행 중인 프로세스들의 pid."""
+    exe = exe_name.lower()
+    return [pid for pid, name in _process_entries() if name == exe]
+
+
+# FILETIME(1601-01-01부터 100ns 단위)과 유닉스 시각(1970-01-01부터 초)의 차이
+_FILETIME_EPOCH_DIFF = 11644473600
+
+
+def process_start_time(pid: int) -> Optional[float]:
+    """프로세스가 시작된 시각 (time.time()과 같은 기준의 초). 알 수 없으면 None."""
+    if not IS_WINDOWS or not pid:
+        return None
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)  # pragma: no cover
+    if not handle:  # pragma: no cover
+        return None
+    try:  # pragma: no cover
+        created, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+        if not kernel32.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
+                                        ctypes.byref(kernel), ctypes.byref(user)):
+            return None
+        ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+        return ticks / 10_000_000 - _FILETIME_EPOCH_DIFF
+    finally:  # pragma: no cover
+        kernel32.CloseHandle(handle)
+
+
+def terminate_process(pid: int) -> bool:
+    """프로세스를 강제로 끝냅니다 (관리자 권한 프로세스는 일반 권한으로 끝낼 수 없음)."""
+    if not IS_WINDOWS or not pid:
+        return False
+    handle = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)  # pragma: no cover
+    if not handle:  # pragma: no cover
+        return False
+    try:  # pragma: no cover
+        return bool(kernel32.TerminateProcess(handle, 1))
+    finally:  # pragma: no cover
+        kernel32.CloseHandle(handle)
 
 
 def _is_cloaked(hwnd: int) -> bool:  # pragma: no cover - Windows 전용

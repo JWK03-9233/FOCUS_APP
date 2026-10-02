@@ -40,12 +40,14 @@ from focus_app.session import FocusSession, format_duration, format_minutes
 from focus_app.ui import app_catalog, icons, theme
 from focus_app.ui.app_picker import AppPickerDialog
 from focus_app.ui.preset_dialog import PresetDialog
+from focus_app.ui.site_list import SiteEditor
 from focus_app.ui.theme import ACCENT
 from focus_app.version import APP_NAME, __version__
 
 CUSTOM_ID = 100000  # 분 값(최대 1440)과 겹치지 않는 id. -1은 Qt가 "자동 지정"으로 해석해 쓰면 안 됨
 UNLIMITED_ID = 0
 OPEN_ROLE = Qt.ItemDataRole.UserRole + 1  # 진행 화면의 허용 앱이 지금 실행 중인지
+SITE_ROLE = Qt.ItemDataRole.UserRole + 2  # 진행 화면의 허용 사이트 주소
 
 
 def _label(text: str = "", name: str = "", wrap: bool = False) -> QLabel:
@@ -81,7 +83,10 @@ def mode_summary(profile: Profile) -> str:
     if not profile.block_everything:
         return "차단 없음"
     n = len(profile.normalized_apps())
-    return f"앱 {n}개 허용" if n else "허용한 앱 없음"
+    text = f"앱 {n}개 허용" if n else "허용한 앱 없음"
+    if profile.limits_sites():
+        text += f" · 사이트 {len(profile.normalized_sites())}개"
+    return text
 
 
 class AppRow(QWidget):
@@ -138,7 +143,7 @@ class _LaunchCursorFilter(QObject):
 
     def over_app(self, pos) -> bool:
         item = self.view.itemAt(pos)
-        return item is not None and bool(item.data(Qt.ItemDataRole.UserRole))
+        return item is not None and bool(item.data(Qt.ItemDataRole.UserRole) or item.data(SITE_ROLE))
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if event.type() == QEvent.Type.MouseMove:
@@ -193,11 +198,15 @@ class MainWindow(QMainWindow):
     quit_requested = Signal()
     update_requested = Signal()
     edit_apps_requested = Signal()  # 집중 중 허용 앱 편집 (해제 문자열 필요)
+    open_site_requested = Signal(str)  # 진행 화면에서 허용 사이트를 눌렀을 때 (사이트 주소)
+    restart_browsers_requested = Signal()  # 사이트 제한을 적용하려고 브라우저 다시 시작
 
     def __init__(self, settings: Settings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.settings = settings
         self._open_apps: set = set()  # 지금 실행 중인 앱 (진행 화면의 점 표시용)
+        self.helper_installed: Optional[bool] = None  # 관리자 권한 도우미 설치 여부 (컨트롤러가 알려 줌)
+        self._notice_action = None
         self._restoring = True  # 화면을 채우는 동안에는 선택 변경을 저장하지 않음
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(icons.app_icon())
@@ -252,6 +261,11 @@ class MainWindow(QMainWindow):
         nl.setContentsMargins(12, 8, 6, 8)
         self.notice_label = _label(wrap=True)
         nl.addWidget(self.notice_label, 1)
+        self.notice_btn = QPushButton("")
+        self.notice_btn.setObjectName("secondary")
+        self.notice_btn.clicked.connect(self._on_notice_action)
+        self.notice_btn.hide()
+        nl.addWidget(self.notice_btn)
         close_notice = QPushButton("✕")
         close_notice.setObjectName("iconButton")
         close_notice.clicked.connect(self.notice.hide)
@@ -309,9 +323,21 @@ class MainWindow(QMainWindow):
         rl.addWidget(self.block_radio)
         rl.addWidget(self.free_radio)
 
+        # ② 쓸 앱 / 쓸 사이트: 탭처럼 하나씩 보여 줌 (한 화면에 같이 두면 목록이 너무 좁아짐)
         apps_header = QHBoxLayout()
-        self.apps_title = _label("② 쓸 앱", "sectionTitle")
-        apps_header.addWidget(self.apps_title, 1)
+        apps_header.setSpacing(6)
+        self.apps_title = QPushButton("② 쓸 앱")
+        self.sites_title = QPushButton("쓸 사이트")
+        self.list_tabs = QButtonGroup(self)
+        for i, btn in enumerate((self.apps_title, self.sites_title)):
+            btn.setObjectName("chip")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.list_tabs.addButton(btn, i)
+            apps_header.addWidget(btn)
+        self.apps_title.setChecked(True)
+        self.list_tabs.idClicked.connect(self._show_list_tab)
+        apps_header.addStretch(1)
         self.add_app_btn = QPushButton("+  앱 추가")
         self.add_app_btn.setObjectName("secondary")
         self.add_app_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -320,6 +346,10 @@ class MainWindow(QMainWindow):
         rl.addSpacing(6)
         rl.addLayout(apps_header)
 
+        self.list_pages = QStackedWidget()
+        apps_page = QWidget()
+        al = QVBoxLayout(apps_page)
+        al.setContentsMargins(0, 0, 0, 0)
         self.apps_stack = QStackedWidget()
         self.app_list = QListWidget()
         self.app_list.setObjectName("appList")
@@ -328,10 +358,15 @@ class MainWindow(QMainWindow):
         self.apps_empty = _label("", "muted", wrap=True)
         self.apps_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.apps_stack.addWidget(self.apps_empty)
-        rl.addWidget(self.apps_stack, 1)
-        rl.addWidget(
+        al.addWidget(self.apps_stack, 1)
+        al.addWidget(
             _label("작업 표시줄, 시작 메뉴, 작업 관리자, Windows 설정은 목록과 상관없이 항상 쓸 수 있습니다.", "hint", True)
         )
+        self.list_pages.addWidget(apps_page)
+        self.site_editor = SiteEditor()
+        self.site_editor.changed.connect(self._on_sites_changed)
+        self.list_pages.addWidget(self.site_editor)
+        rl.addWidget(self.list_pages, 1)
         body.addWidget(right, 1)
         root.addLayout(body, 1)
 
@@ -444,11 +479,51 @@ class MainWindow(QMainWindow):
         self._reload_apps()
         self._update_start_summary()
 
+    def _reload_sites(self) -> None:
+        p = self.current_mode()
+        if p is None:
+            return
+        self.sites_title.setVisible(p.block_everything)
+        if not p.block_everything:
+            self._show_list_tab(0)
+        self._update_sites_title(p)
+        self.site_editor.set_values(p.restrict_sites, p.normalized_sites())
+        self.site_editor.set_context(p.normalized_apps(), self.helper_installed)
+
+    def _update_sites_title(self, p: Profile) -> None:
+        n = len(p.normalized_sites())
+        self.sites_title.setText(f"쓸 사이트  ({n}개)" if p.restrict_sites else "쓸 사이트  (제한 없음)")
+
+    def _show_list_tab(self, index: int) -> None:
+        """② 쓸 앱(0) / 쓸 사이트(1) 중 하나를 보여 줍니다."""
+        self.list_tabs.button(index).setChecked(True)
+        self.list_pages.setCurrentIndex(index)
+        self.add_app_btn.setVisible(index == 0)
+
+    def set_helper_installed(self, installed: Optional[bool]) -> None:
+        """관리자 권한 도우미가 설치돼 있는지 (사이트 제한 경고 문구용)."""
+        self.helper_installed = installed
+        p = self.current_mode()
+        if p is not None:
+            self.site_editor.set_context(p.normalized_apps(), installed)
+
+    def _on_sites_changed(self) -> None:
+        p = self.current_mode()
+        if p is None:
+            return
+        p.restrict_sites = self.site_editor.restrict
+        p.allowed_sites = list(self.site_editor.sites)
+        self.settings_changed.emit()
+        self._update_sites_title(p)
+        self._refresh_mode_item()
+        self._update_start_summary()
+
     def _reload_apps(self) -> None:
         p = self.current_mode()
         self.app_list.clear()
         if p is None:
             return
+        self._reload_sites()
         apps = p.normalized_apps()
         self.add_app_btn.setEnabled(p.block_everything)
         if not p.block_everything:
@@ -665,6 +740,9 @@ class MainWindow(QMainWindow):
         else:
             n = len(p.normalized_apps())
             what = f"고른 앱 {n}개만 쓸 수 있습니다" if n else "⚠ 고른 앱이 없어 거의 모든 앱이 최소화됩니다"
+            if p.limits_sites():
+                k = len(p.normalized_sites())
+                what += f" · 브라우저에서는 사이트 {k}개만" if k else " · 브라우저에서 사이트를 열 수 없습니다"
         self.start_summary.setText(f"<b>{p.name}</b> · {when}<br>{what}")
 
     def _request_start(self) -> None:
@@ -685,7 +763,8 @@ class MainWindow(QMainWindow):
                 f"<b>{p.name}</b> 모드로 {when} 집중합니다.<br><br>"
                 f"쓸 수 있는 앱: {apps or '(없음)'}<br>"
                 "그 밖의 앱은 앞에 나오면 바로 최소화됩니다.<br><br>"
-                f"중간에 끝내려면 <b>{self.settings.unlock_code_length}글자 랜덤 문자열</b>을 직접 입력해야 합니다."
+                + self._sites_confirm_text(p)
+                + f"중간에 끝내려면 <b>{self.settings.unlock_code_length}글자 랜덤 문자열</b>을 직접 입력해야 합니다."
             )
         else:
             body = f"<b>{p.name}</b> 모드로 {when} 집중합니다. 앱은 막지 않습니다."
@@ -700,6 +779,19 @@ class MainWindow(QMainWindow):
         finally:
             box.deleteLater()
 
+    def _sites_confirm_text(self, p: Profile) -> str:
+        """집중 시작 확인 창의 사이트 제한 안내 (사이트 제한을 안 쓰면 빈 문자열)."""
+        if not p.limits_sites():
+            return ""
+        sites = [s.lstrip(".") for s in p.normalized_sites()]
+        text = ", ".join(sites[:6]) + (f" 외 {len(sites) - 6}개" if len(sites) > 6 else "")
+        out = f"브라우저에서 열 수 있는 사이트: {text or '(없음)'}<br>"
+        if self.helper_installed is False:
+            out += "⚠ 관리자 권한 도우미가 없어 사이트 제한을 쓸 수 없어, 브라우저가 모두 최소화됩니다.<br>"
+        else:
+            out += "열려 있는 브라우저는 다시 시작해야 사이트 제한이 적용됩니다.<br>"
+        return out + "<br>"
+
     def set_update_available(self, version: Optional[str]) -> None:
         """새 버전이 있으면 머리글 버튼을 눈에 띄게 바꿉니다."""
         if version:
@@ -711,9 +803,19 @@ class MainWindow(QMainWindow):
         self.update_btn.style().unpolish(self.update_btn)
         self.update_btn.style().polish(self.update_btn)
 
-    def show_notice(self, text: str) -> None:
+    def show_notice(self, text: str, action_text: str = "", on_action=None) -> None:
+        """알림 띠를 보여 줍니다. action_text를 주면 오른쪽에 그 버튼을 달고, 누르면 on_action을 부름."""
         self.notice_label.setText(text)
+        self._notice_action = on_action if action_text else None
+        self.notice_btn.setText(action_text)
+        self.notice_btn.setVisible(bool(action_text))
         self.notice.show()
+
+    def _on_notice_action(self) -> None:
+        action = self._notice_action
+        self.notice.hide()
+        if action is not None:
+            action()
 
     # ================================================================ 진행 화면
     def _build_running_page(self) -> QWidget:
@@ -764,6 +866,22 @@ class MainWindow(QMainWindow):
         self.run_apps.setItemDelegate(_RunAppDelegate(self.run_apps))
         self.run_apps.itemClicked.connect(self._on_run_app_clicked)
         cl.addWidget(self.run_apps, 1)
+
+        self.run_sites_title = _label("지금 열 수 있는 사이트", "sectionTitle")
+        cl.addWidget(self.run_sites_title)
+        self.run_sites = QListWidget()
+        self.run_sites.setObjectName("appList")
+        self.run_sites.setViewMode(QListView.ViewMode.ListMode)
+        self.run_sites.setFlow(QListView.Flow.LeftToRight)
+        self.run_sites.setWrapping(True)
+        self.run_sites.setResizeMode(QListView.ResizeMode.Adjust)
+        self.run_sites.setSpacing(6)
+        self.run_sites.setIconSize(QSize(18, 18))
+        self.run_sites.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.run_sites.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._run_sites_cursor = _LaunchCursorFilter(self.run_sites)
+        self.run_sites.itemClicked.connect(self._on_run_site_clicked)
+        cl.addWidget(self.run_sites, 1)
         cl.addWidget(_label("작업 표시줄, 시작 메뉴, 작업 관리자, Windows 설정은 항상 쓸 수 있습니다.", "hint", True))
         root.addWidget(card, 1)
 
@@ -780,6 +898,21 @@ class MainWindow(QMainWindow):
         self.emergency_banner.hide()
         root.addSpacing(10)
         root.addWidget(self.emergency_banner)
+
+        # 사이트 제한 상태 띠 (다시 시작해야 하는 브라우저가 있거나 도우미가 없을 때)
+        self.site_banner = QFrame()
+        self.site_banner.setObjectName("banner")
+        sb = QHBoxLayout(self.site_banner)
+        sb.setContentsMargins(12, 8, 8, 8)
+        self.site_banner_label = _label(wrap=True)
+        sb.addWidget(self.site_banner_label, 1)
+        self.restart_browsers_btn = QPushButton("브라우저 다시 시작")
+        self.restart_browsers_btn.setToolTip("열려 있던 탭은 다시 열립니다. 입력하던 내용은 사라질 수 있어요.")
+        self.restart_browsers_btn.clicked.connect(self.restart_browsers_requested.emit)
+        sb.addWidget(self.restart_browsers_btn)
+        self.site_banner.hide()
+        root.addSpacing(6)
+        root.addWidget(self.site_banner)
 
         buttons = QHBoxLayout()
         root.addSpacing(10)
@@ -822,7 +955,10 @@ class MainWindow(QMainWindow):
                 self.run_apps.addItem("(없음 — 시스템 요소만 쓸 수 있습니다)")
         else:
             self.run_apps_title.setText("이 모드는 앱을 막지 않습니다")
+        self._show_run_sites(profile)
+        self.set_site_status("", False)
         self.edit_apps_btn.setVisible(profile.block_everything)
+        self.edit_apps_btn.setText("허용 앱·사이트 편집…" if profile.limits_sites() else "허용 앱 편집…")
         self.end_hint.setText(
             f"끝내려면 {self.settings.unlock_code_length}글자 랜덤 문자열을 직접 입력해야 합니다."
         )
@@ -871,6 +1007,36 @@ class MainWindow(QMainWindow):
             if bool(item.data(OPEN_ROLE)) != is_open or force:
                 item.setData(OPEN_ROLE, is_open)
                 item.setToolTip(f"{name} 실행 중 · 눌러서 앞으로 가져오기" if is_open else f"눌러서 {name} 열기")
+
+    def _show_run_sites(self, profile: Profile) -> None:
+        self.run_sites.clear()
+        on = profile.limits_sites()
+        self.run_sites_title.setVisible(on)
+        self.run_sites.setVisible(on)
+        if not on:
+            return
+        sites = profile.normalized_sites()
+        self.run_sites_title.setText(f"지금 열 수 있는 사이트 ({len(sites)}개)")
+        globe = icons.globe_icon()
+        for site in sites:
+            item = QListWidgetItem(globe, site.lstrip("."))
+            item.setData(SITE_ROLE, site)
+            item.setToolTip(f"눌러서 {site.lstrip('.')} 열기")
+            self.run_sites.addItem(item)
+        if not sites:
+            self.run_sites.addItem("(없음 — 내 PC의 파일만 열 수 있습니다)")
+
+    def set_site_status(self, text: str, can_restart: bool) -> None:
+        """사이트 제한 상태 띠. text가 비면 숨김."""
+        if self.site_banner_label.text() != text:
+            self.site_banner_label.setText(text)
+        self.restart_browsers_btn.setVisible(can_restart)
+        self.site_banner.setVisible(bool(text))
+
+    def _on_run_site_clicked(self, item: QListWidgetItem) -> None:
+        site = item.data(SITE_ROLE)
+        if site:
+            self.open_site_requested.emit(str(site))
 
     def _on_run_app_clicked(self, item: QListWidgetItem) -> None:
         exe = item.data(Qt.ItemDataRole.UserRole)

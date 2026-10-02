@@ -16,6 +16,7 @@
       일반 권한 작업(``FocusApp\\Main``)으로 본 앱을 다시 띄웁니다. 본 앱도 도우미가 꺼지면 다시 띄웁니다.
       관리자 계정이면 작업 관리자가 관리자 권한으로 뜨므로 둘 다 끌 수는 있지만, 하나씩 끄면 서로 되살립니다.
     * 엄격 모드면 집중 중에 작업 관리자를 끕니다 (``taskmgr_lock``, 관리자 권한이 필요해 도우미가 맡음).
+    * 사이트 제한 모드면 집중 중에 브라우저 정책을 씁니다 (``browser_policy``, 역시 관리자 권한이 필요).
     * 집중 중에 해제 문자열을 넣고 정식으로 종료하면 (``quit.json``) 본 앱을 다시 띄우지 않습니다.
     * 집중 세션이 없거나 끝나면 도우미는 스스로 종료합니다 (업데이트 중 파일이 잠기지 않도록).
 """
@@ -32,7 +33,7 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from focus_app import taskmgr_lock, winapi
+from focus_app import browser_policy, taskmgr_lock, winapi
 from focus_app.config import Settings, data_dir
 from focus_app.enforcer import ForegroundWindow
 from focus_app.session import FocusSession
@@ -160,6 +161,7 @@ def run_helper(base: Optional[Path] = None) -> int:
     last_main_check = 0.0
     main_task_ready = False
     taskmgr_failed = False
+    policy_retry_at = 0.0  # 사이트 제한을 켜지 못했으면 이 시각 전에는 다시 시도하지 않음
 
     while True:
         now = time.time()
@@ -171,6 +173,7 @@ def run_helper(base: Optional[Path] = None) -> int:
         if not active:
             monitor = None
             taskmgr_lock.release(base)  # 집중이 끝났거나 지난번에 비정상 종료됨 -> 작업 관리자 되돌림
+            browser_policy.release(base)  # 브라우저 사이트 제한도 같은 이유로 되돌림
             idle_since = idle_since or now
             if now - idle_since >= IDLE_EXIT_SECONDS:
                 log.info("집중 세션이 없어 도우미를 종료합니다.")
@@ -197,6 +200,12 @@ def run_helper(base: Optional[Path] = None) -> int:
                 taskmgr_lock.release(base)
             elif not taskmgr_failed:
                 taskmgr_failed = not taskmgr_lock.engage(base)  # 실패하면 이번 실행에서는 다시 시도하지 않음
+            # 매초 레지스트리를 확인해 다르면 다시 씀 (모드의 사이트를 고쳤거나 누가 값을 지운 경우)
+            sites = browser_policy.desired_sites(profile)
+            if sites is None:
+                browser_policy.release(base)
+            elif now >= policy_retry_at and not browser_policy.engage(base, sites):
+                policy_retry_at = now + 30.0  # 실패하면 본 앱이 브라우저를 막고 있으니 가끔만 다시 시도
             main_pid = main_app_pid(base)
             main_dead_since = None if main_pid else (main_dead_since or now)
             if should_relaunch(main_pid, main_dead_since, last_relaunch, now, quit_marked(session, base)):
@@ -211,6 +220,7 @@ def run_helper(base: Optional[Path] = None) -> int:
         time.sleep(max(0.1, settings.poll_interval_ms / 1000))
 
     taskmgr_lock.release(base)
+    browser_policy.release(base)
     try:
         heartbeat_path(base).unlink()
     except OSError:
@@ -376,7 +386,23 @@ def register() -> Tuple[bool, str]:
     return True, "관리자 권한 도우미를 설치했습니다."
 
 
+def _release_locks_first(base: Optional[Path] = None, timeout: float = 8.0) -> None:
+    """도우미가 바꿔 둔 설정(작업 관리자 끄기, 사이트 제한)이 남아 있으면 도우미를 띄워 되돌리게 합니다.
+
+    도우미 작업을 지우면 되돌릴 방법이 없어지므로 지우기 전에 부릅니다 (집중 중이 아닐 때만 제거할 수 있음).
+    """
+    base = base or data_dir()
+    if not (taskmgr_lock.engaged(base) or browser_policy.engaged(base)):
+        return
+    if not start():
+        return
+    deadline = time.monotonic() + timeout
+    while (taskmgr_lock.engaged(base) or browser_policy.engaged(base)) and time.monotonic() < deadline:
+        time.sleep(0.2)
+
+
 def unregister() -> Tuple[bool, str]:
+    _release_locks_first()
     # 본 앱 다시 띄우기 작업도 함께 지움 (없으면 그 부분만 실패하고 넘어감, 종료 코드는 도우미 작업 기준)
     code = _run_elevated(
         "cmd.exe", f'/c schtasks /Delete /TN "{MAIN_TASK_NAME}" /F & schtasks /Delete /TN "{TASK_NAME}" /F'

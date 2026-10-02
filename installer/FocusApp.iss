@@ -109,7 +109,8 @@ begin
 end;
 
 { 관리자 권한 도우미 작업(앱 설정이나 설치할 때 등록)이 있으면 제거할 때 함께 지움. 관리자 확인(UAC)이 한 번 뜹니다.
-  도우미가 등록하는 본 앱 다시 띄우기 작업(FocusApp\Main)도 같이 지움. }
+  도우미가 등록하는 본 앱 다시 띄우기 작업(FocusApp\Main)도 같이 지움.
+  그 전에 도우미가 바꿔 둔 설정(작업 관리자 끄기, 브라우저 사이트 제한)이 남아 있으면 원래대로 돌림 (--release-locks). }
 function HelperTaskExists: Boolean;
 var
   ResultCode: Integer;
@@ -124,6 +125,7 @@ var
 begin
   if (CurUninstallStep = usUninstall) and HelperTaskExists then
     ShellExec('runas', ExpandConstant('{cmd}'),
-              '/c schtasks /Delete /TN "FocusApp\Main" /F & schtasks /Delete /TN "FocusApp\Helper" /F', '',
+              '/c start "" /wait "' + ExpandConstant('{app}\{#MyAppExeName}') + '" --release-locks'
+              + ' & schtasks /Delete /TN "FocusApp\Main" /F & schtasks /Delete /TN "FocusApp\Helper" /F', '',
               SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;

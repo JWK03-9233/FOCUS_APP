@@ -53,6 +53,7 @@ class AllowlistMonitor:
         on_block: Optional[BlockCallback] = None,
         handles: Optional[Callable[[ForegroundWindow], bool]] = None,
         on_block_failed: Optional[BlockCallback] = None,
+        gate: Optional[Callable[[ForegroundWindow], bool]] = None,
     ) -> None:
         self.profile = profile
         self.own_pid = winapi.current_pid() if own_pid is None else own_pid
@@ -62,8 +63,12 @@ class AllowlistMonitor:
         self.handles = handles
         # 최소화를 시도했지만 실제로 안 된 경우 (관리자 권한 창 등) 알림
         self.on_block_failed = on_block_failed
+        # 허용 앱이어도 지금은 막아야 하는지 한 번 더 확인 (False면 막음).
+        # 사이트 제한을 아직 모르는 브라우저(정책을 쓰기 전부터 실행 중)를 막을 때 사용
+        self.gate = gate
         self._last_failed: tuple[int, float] = (0, 0.0)
         self.last_allowed_hwnd: int = 0
+        self.last_allowed_pid: int = 0
         self.block_count: int = 0
         self._last_notified: tuple[int, float] = (0, 0.0)
 
@@ -97,10 +102,13 @@ class AllowlistMonitor:
         decision = decide(window, self.profile, self.own_pid)
         if window is None:
             return decision
+        if decision is Decision.ALLOW and self.gate is not None and not self._gate_allows(window):
+            decision = Decision.BLOCK
 
         if decision is Decision.ALLOW:
             if is_user_app(window, self.own_pid):
                 self.last_allowed_hwnd = window.hwnd
+                self.last_allowed_pid = window.pid
             return decision
 
         if decision is Decision.BLOCK:
@@ -109,8 +117,18 @@ class AllowlistMonitor:
             self._block(window)
         return decision
 
+    def _gate_allows(self, window: ForegroundWindow) -> bool:
+        try:
+            return bool(self.gate(window))
+        except Exception:  # noqa: BLE001 - 확인이 고장 나도 허용 앱까지 못 쓰게 되지는 않게
+            log.exception("허용 앱 추가 확인 실패")
+            return True
+
     def _block(self, window: ForegroundWindow) -> None:
         target = self.backend.root_owner(window.hwnd) or window.hwnd
+        if self.last_allowed_pid == window.pid:
+            # 조금 전까지 허용하던 앱을 이제 막는 경우 (사이트 제한 등): 그 창으로 되돌리면 다시 막혀 깜빡임
+            self.last_allowed_hwnd = self.last_allowed_pid = 0
         # 이미 최소화된 창이 포그라운드로 남아 있는 경우(복귀할 창이 없을 때 생김)는
         # 새 차단으로 세지 않고 포커스만 다시 옮깁니다.
         if not self.backend.is_minimized(target):
