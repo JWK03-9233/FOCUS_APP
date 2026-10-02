@@ -675,6 +675,19 @@ def test_end_popup_emergency_text(qapp):
     dlg = FocusEndDialog("emergency", "공부용", 600, 0)
     assert "비상 해제" in dlg.title.text()
     assert "10분" in dlg.summary.text() and "새지 않았어요" in dlg.summary.text()
+    assert dlg.restart_btn is None  # 열린 브라우저가 없으면 다시 시작 버튼 없음
+
+
+def test_end_popup_restart_browsers_button(qapp):
+    from focus_app.ui.end_dialog import FocusEndDialog
+
+    dlg = FocusEndDialog("expired", "공부용", 600, 0, ["Chrome"])
+    fired = []
+    dlg.restart_browsers_requested.connect(lambda: fired.append(True))
+    assert dlg.restart_btn is not None
+    dlg.restart_btn.click()
+    assert fired == [True]
+    assert dlg.result() == dlg.DialogCode.Accepted  # 확인 창을 가리지 않게 먼저 닫힘
 
 
 def QTest_wait(qapp, ms):

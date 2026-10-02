@@ -286,3 +286,31 @@ def test_controller_gate_and_open_site(qapp, monkeypatch, tmp_path):
     finally:
         ctl._end_session("manual")
         _close(ctl)
+
+
+def test_end_notice_offers_restart_even_for_background_browser(qapp, monkeypatch):
+    from focus_app import app as app_mod
+
+    ctl = app_mod.FocusApp(qapp, show_window=False)
+    try:
+        p = ctl.settings.current_profile()
+        p.allowed_apps = ["chrome.exe"]
+        p.restrict_sites = True
+        p.allowed_sites = ["notion.so"]
+        ctl.start_focus(p.name, 30)
+        # 창은 못 찾았지만 Chrome 프로세스는 돌고 있음 -> 그래도 알림 띠에 다시 시작 버튼
+        monkeypatch.setattr(browser_policy, "has_window", lambda exe: False)
+        monkeypatch.setattr(browser_policy, "running_pids", lambda exe: [77] if exe == "chrome.exe" else [])
+        ctl._end_session("manual")
+        assert not ctl.window.notice.isHidden()
+        assert not ctl.window.notice_btn.isHidden()
+        assert "Chrome" in ctl.window.notice_label.text()
+
+        closed = []
+        monkeypatch.setattr(browser_policy, "engaged", lambda d: False)
+        monkeypatch.setattr(browser_policy, "close_browser", lambda exe, timeout=8.0: closed.append(exe) or True)
+        monkeypatch.setattr(app_mod, "run_in_thread", lambda fn, name: fn())
+        ctl.window.notice_btn.click()  # 창이 없으니 묻지 않고 뒤에서 돌던 프로세스만 끝냄
+        assert closed == ["chrome.exe"]
+    finally:
+        _close(ctl)

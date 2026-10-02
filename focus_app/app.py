@@ -302,7 +302,8 @@ class FocusApp:
         if self.session is None:
             return
         session, monitor = self.session, self.monitor
-        had_sites = self._desired_sites() is not None
+        # 정책이 남아 있으면 이번 모드에 사이트가 없어도 (앱이 다시 켜졌거나 모드가 바뀐 경우) 풀어야 함
+        had_sites = self._desired_sites() is not None or browser_policy.engaged(data_dir())
         self.poll_timer.stop()
         self.monitor = None
         self.session = None
@@ -324,7 +325,8 @@ class FocusApp:
             "emergency": "비상 해제가 적용되어 집중이 끝났습니다.",
         }.get(reason, "집중이 끝났습니다.")
         self.window.show_setup()
-        browsers = self._running_browsers() if had_sites else []
+        browsers = self._release_targets() if had_sites else []
+        log.info("집중 끝 (%s): 사이트 제한 %s, 다시 시작할 브라우저 %s", reason, had_sites, browsers)
         if browsers:
             # 브라우저는 정책을 시작할 때와 15분마다만 읽으므로, 그대로 두면 잠시 사이트가 계속 막혀 있음
             names = ", ".join(browser_policy.browser_name(e) for e in browsers)
@@ -339,17 +341,24 @@ class FocusApp:
             # 직접 끝낸 게 아니면 놓치지 않게: 창을 앞으로 가져오고, 닫을 때까지 떠 있는 알림 창을 띄움.
             # 집중 중에 최소화된 앱들은 그대로 둠 (한꺼번에 다시 열지 않음)
             self.show_window()
-            self._show_end_popup(reason, session.profile, focused, blocked)
+            names = [browser_policy.browser_name(e) for e in browsers]
+            self._show_end_popup(reason, session.profile, focused, blocked, names)
 
-    def _show_end_popup(self, reason: str, mode_name: str, focused: int, blocked: int) -> None:
+    def _show_end_popup(self, reason: str, mode_name: str, focused: int, blocked: int,
+                        browsers: Optional[List[str]] = None) -> None:
         if self._end_popup is not None:
             self._end_popup.close()
-        popup = FocusEndDialog(reason, mode_name, focused, blocked, parent=self.window)
+        popup = FocusEndDialog(reason, mode_name, focused, blocked, browsers, parent=self.window)
+        popup.restart_browsers_requested.connect(self._restart_from_end_popup)
         popup.destroyed.connect(lambda *_: setattr(self, "_end_popup", None))
         self._end_popup = popup
         popup.show()
         # 다른 앱을 쓰고 있어도 앞으로 오도록 (Windows는 배경 앱이 포커스를 가져가는 것을 막으므로 우회)
         QTimer.singleShot(100, self._bring_end_popup_to_front)
+
+    def _restart_from_end_popup(self) -> None:
+        self.window.notice.hide()  # 같은 버튼이 있는 알림 띠는 치움
+        self._restart_after_release()
 
     def _bring_end_popup_to_front(self) -> None:
         for widget in (self.window, self._end_popup):
@@ -733,18 +742,28 @@ class FocusApp:
         """창이 떠 있는 지원 브라우저 (창 없이 뒤에서만 도는 Edge 등은 빼고: 다시 시작하면 창이 새로 열림)."""
         return [b.exe for b in browser_policy.BROWSERS if browser_policy.has_window(b.exe)]
 
+    def _release_targets(self) -> List[str]:
+        """집중이 끝난 뒤 다시 시작해야 사이트 제한이 바로 풀리는 브라우저: 창이 있든 뒤에서만 돌든 실행 중인 것."""
+        return [b.exe for b in browser_policy.BROWSERS if browser_policy.running_pids(b.exe)]
+
     def restart_browsers(self, url: str = "", only: Optional[List[str]] = None, after_release: bool = False) -> None:
         """브라우저를 다시 시작해 새 정책을 읽게 합니다 (확인을 받은 뒤, 열려 있던 탭은 다시 열림)."""
         if self._restarting or self._dialog_open:
             return
+        background: List[str] = []
         if after_release:
             targets = self._running_browsers()
+            background = [e for e in self._release_targets() if e not in targets]
         else:
             applied_at = self._policy_ready()
             if applied_at is None:
                 return
             targets = only if only is not None else browser_policy.stale_browsers(self._allowed_browsers(), applied_at)
         if not targets:
+            if background:  # 창 없이 뒤에서만 돌던 프로세스: 닫을 탭이 없으니 묻지 않고 끝냄 (다음에 켜면 새 정책)
+                run_in_thread(lambda: [browser_policy.close_browser(e) for e in background], "browser-close")
+                self.tray.showMessage(APP_NAME, "브라우저를 다시 켜면 모든 사이트가 열립니다.",
+                                      QSystemTrayIcon.MessageIcon.Information, 4000)
             return
         names = ", ".join(browser_policy.browser_name(e) for e in targets)
         why = ("집중이 끝나 사이트 제한을 풀었습니다." if after_release
@@ -769,6 +788,8 @@ class FocusApp:
         self._restarting = True
         def work() -> None:
             failed = []
+            for exe in background:
+                browser_policy.close_browser(exe)
             for i, exe in enumerate(targets):
                 try:
                     if not browser_policy.restart_browser(exe, paths[exe], url if i == 0 else ""):

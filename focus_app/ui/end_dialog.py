@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from typing import List, Optional
+
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QWidget
 
 from focus_app.session import format_minutes
@@ -14,12 +16,15 @@ from focus_app.ui.scroll import scroll_layout
 
 
 class FocusEndDialog(QDialog):
+    restart_browsers_requested = Signal()  # 사이트 제한을 바로 풀려고 브라우저 다시 시작
+
     def __init__(
         self,
         reason: str,
         mode_name: str,
         focused_seconds: int,
         blocked: int,
+        browsers: Optional[List[str]] = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -57,10 +62,26 @@ class FocusEndDialog(QDialog):
         self.summary.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.summary.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(self.summary)
+
+        # 브라우저는 정책을 시작할 때와 15분마다만 읽으므로, 다시 시작해야 사이트 제한이 바로 풀림
+        self.restart_btn: Optional[QPushButton] = None
+        if browsers:
+            note = QLabel(f"{', '.join(browsers)}은(는) 다시 시작하면 모든 사이트가 바로 열립니다 "
+                          "(그대로 두면 15분 안에 풀림).")
+            note.setObjectName("muted")
+            note.setWordWrap(True)
+            note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(note)
         layout.addSpacing(10)
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
+        if browsers:
+            self.restart_btn = QPushButton("브라우저 다시 시작")
+            self.restart_btn.setObjectName("secondary")
+            self.restart_btn.setToolTip("열려 있던 탭은 다시 열립니다. 입력하던 내용은 사라질 수 있어요.")
+            self.restart_btn.clicked.connect(self._on_restart)
+            buttons.addWidget(self.restart_btn)
         self.ok_btn = QPushButton("확인")
         self.ok_btn.setDefault(True)
         self.ok_btn.setMinimumWidth(120)
@@ -68,3 +89,8 @@ class FocusEndDialog(QDialog):
         buttons.addWidget(self.ok_btn)
         buttons.addStretch(1)
         layout.addLayout(buttons)
+
+    def _on_restart(self) -> None:
+        # 이 창은 항상 위에 떠 있어 확인 창을 가리므로 먼저 닫음
+        self.accept()
+        self.restart_browsers_requested.emit()

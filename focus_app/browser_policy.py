@@ -469,6 +469,19 @@ def open_url(browser_path: str, url: str, restore_session: bool = False) -> bool
     return True
 
 
+def close_browser(exe: str, timeout: float = 8.0) -> bool:
+    """브라우저 프로세스를 모두 끝냅니다 (다시 열지 않음). 시간이 걸리니 스레드에서 호출."""
+    for pid in running_pids(exe):
+        winapi.terminate_process(pid)
+    deadline = time.monotonic() + timeout
+    while running_pids(exe):
+        if time.monotonic() >= deadline:
+            log.warning("%s을(를) 끝내지 못했습니다 (관리자 권한으로 실행됐을 수 있음)", exe)
+            return False
+        time.sleep(0.2)
+    return True
+
+
 def restart_browser(exe: str, fallback_path: str = "", url: str = "", timeout: float = 8.0,
                     restore: Optional[bool] = None) -> bool:
     """브라우저를 끝내고 열려 있던 탭 그대로 다시 엽니다 (새 정책을 읽게 함). 시간이 걸리니 스레드에서 호출.
