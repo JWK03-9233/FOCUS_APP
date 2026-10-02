@@ -401,6 +401,21 @@ class Settings:
     def app_path(self, exe_name: str) -> str:
         return self.app_info.get(normalize_exe(exe_name), {}).get("path", "")
 
+    def remember_web_app_site(self, key: str, site: str) -> bool:
+        """웹 앱의 시작 주소를 기억합니다 (사이트 목록에는 안 보이고 브라우저 정책에서만 허용). 바뀌었으면 True."""
+        site = normalize_site(site)
+        if not split_web_app(key) or not site or self.app_info.get(key, {}).get("site") == site:
+            return False
+        self.app_info.setdefault(key, {})["site"] = site
+        return True
+
+    def web_app_sites(self, profile: Optional[Profile]) -> List[str]:
+        """이 모드가 허용한 웹 앱들의 주소 (사이트 제한 때 뒤에서 같이 허용)."""
+        if profile is None:
+            return []
+        keys = [k for k in profile.normalized_apps() if split_web_app(k)]
+        return list(dict.fromkeys(s for s in (self.app_info.get(k, {}).get("site", "") for k in keys) if s))
+
     def remember_sites(self, sites: List[str]) -> None:
         """사이트들을 저장한 사이트 목록에 넣습니다 (이미 있으면 그대로)."""
         cleaned = (normalize_site(str(x)) for x in sites)
@@ -451,6 +466,7 @@ class Settings:
             for exe, info in info_raw.items():
                 if isinstance(info, dict):
                     settings.remember_app(str(exe), str(info.get("name", "")), str(info.get("path", "")))
+                    settings.remember_web_app_site(str(exe), str(info.get("site", "")))
         for f in fields(cls):
             if f.name in ("profiles", "app_info", "duration_presets", "favorite_apps", "hidden_apps",
                           "window_geometries", "saved_sites") or f.name not in raw:

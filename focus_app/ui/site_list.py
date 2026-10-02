@@ -245,6 +245,7 @@ class SiteEditor(QWidget):
             self.sites = [s for s in self.sites if s != site]
         else:
             return
+        self._update_warning()  # 웹 앱 주소 경고는 체크에 따라 바뀜
         self.changed.emit()
 
     def remove_site(self, site: str) -> None:

@@ -238,6 +238,22 @@ def start_hosts(apps: List[Tuple[str, str]]) -> List[str]:
     return out
 
 
+def learn_sites(settings, keys: Iterable[str]) -> bool:
+    """웹 앱들의 시작 주소를 찾아 설정에 기억합니다 (이미 아는 앱은 건너뜀). 새로 기억한 것이 있으면 True.
+
+    본 앱(사용자 계정)에서 불러 둡니다: 도우미는 이 기억된 값으로 정책을 씀.
+    """
+    changed = False
+    for key in keys:
+        parts = split_web_app(key)
+        if not parts or settings.app_info.get(key, {}).get("site"):
+            continue
+        host = start_host(*parts)
+        if host:
+            changed = settings.remember_web_app_site(key, host) or changed
+    return changed
+
+
 def key_for_shortcut(lnk: Path, target: str) -> Optional[str]:
     found = read_shortcut(lnk, target)
     return web_app_key(*found) if found else None

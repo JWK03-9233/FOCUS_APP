@@ -201,7 +201,7 @@ def run_helper(base: Optional[Path] = None) -> int:
             elif not taskmgr_failed:
                 taskmgr_failed = not taskmgr_lock.engage(base)  # 실패하면 이번 실행에서는 다시 시도하지 않음
             # 매초 레지스트리를 확인해 다르면 다시 씀 (모드의 사이트를 고쳤거나 누가 값을 지운 경우)
-            sites = browser_policy.desired_sites(profile)
+            sites = browser_policy.desired_sites(profile, settings.web_app_sites(profile))
             if sites is None:
                 browser_policy.release(base)
             elif now >= policy_retry_at and not browser_policy.engage(base, sites):

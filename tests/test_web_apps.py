@@ -92,7 +92,7 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-def test_adding_web_app_in_main_window_adds_its_site(qapp, monkeypatch):
+def test_adding_web_app_in_main_window_remembers_its_site_hidden(qapp, monkeypatch):
     from focus_app.config import Settings
     from focus_app.ui import app_catalog
     from focus_app.ui.main_window import MainWindow
@@ -103,5 +103,6 @@ def test_adding_web_app_in_main_window_adds_its_site(qapp, monkeypatch):
     p = w.current_mode()
     key = web_app_key("chrome.exe", KEEP)
     w.add_entries(p, [app_catalog.AppEntry(exe=key, name="Google Keep")])
-    assert key in p.normalized_apps() and "keep.google.com" in p.normalized_sites()
+    assert key in p.normalized_apps() and "keep.google.com" not in p.normalized_sites()  # 목록엔 안 넣음
+    assert s.web_app_sites(p) == ["keep.google.com"]  # 뒤에서 허용할 주소로 기억
     assert s.app_display_name(key) == "Google Keep"

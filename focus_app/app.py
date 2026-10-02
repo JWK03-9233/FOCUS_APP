@@ -11,7 +11,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QDialog, QInputDialog, QMenu, QMessageBox, QSystemTrayIcon
 
-from focus_app import browser_policy, helper, taskmgr_lock, unlock, updater, winapi
+from focus_app import browser_policy, helper, taskmgr_lock, unlock, updater, web_apps, winapi
 from focus_app.config import Profile, Settings, data_dir, site_url, split_web_app
 from focus_app.enforcer import ForegroundWindow
 from focus_app.monitor import AllowlistMonitor
@@ -273,8 +273,14 @@ class FocusApp:
         self._safe_save_settings()
         self._begin(FocusSession.start(profile_name, minutes))
 
+    def _learn_web_app_sites(self, profile: Profile) -> None:
+        """허용한 웹 앱의 주소를 기억해 둠 (도우미가 정책을 쓰기 전에 settings.json에 있어야 함)."""
+        if web_apps.learn_sites(self.settings, profile.normalized_apps()):
+            self._safe_save_settings()
+
     def _begin(self, session: FocusSession, resumed: bool = False) -> None:
         profile = self.settings.get_profile(session.profile) or self.settings.current_profile()
+        self._learn_web_app_sites(profile)
         self.session = session
         self._safe_save_session()
         self._warned_elevated = False
@@ -505,6 +511,7 @@ class FocusApp:
     def _apply_session_profile(self, session: FocusSession, profile: Profile) -> None:
         """바뀐 모드(또는 그 목록)를 감시·사이트 제한·진행 화면에 바로 반영합니다."""
         before = self._desired_sites()
+        self._learn_web_app_sites(profile)
         if self.monitor is not None:
             self.monitor.set_profile(copy.deepcopy(profile))
         if self._desired_sites() != before:
@@ -701,7 +708,8 @@ class FocusApp:
 
     def _desired_sites(self) -> Optional[List[str]]:
         """지금 집중에 걸어야 하는 허용 사이트 (사이트 제한이 없으면 None)."""
-        return browser_policy.desired_sites(self._session_profile())
+        profile = self._session_profile()
+        return browser_policy.desired_sites(profile, self.settings.web_app_sites(profile))
 
     def _policy_ready(self) -> Optional[float]:
         """원하는 사이트 목록이 브라우저 정책에 적용됐으면 그 적용 시각, 아니면 None."""
@@ -714,6 +722,10 @@ class FocusApp:
         profile = self._session_profile()
         apps = profile.normalized_apps() if profile is not None else []
         allowed = [exe for exe in apps if exe in browser_policy.SUPPORTED_EXES]
+        # 웹 앱(Google Keep 등)은 그 브라우저 안에서 돌므로, 그 브라우저도 다시 시작 안내·버튼 대상
+        if profile is not None:
+            allowed += [exe for exe, _ in profile.web_apps() if exe in browser_policy.SUPPORTED_EXES]
+            allowed = list(dict.fromkeys(allowed))
         if not allowed and profile is not None and profile.browses_sites():
             # 브라우저를 허용 앱에 넣지 않았어도 허용 사이트는 지원 브라우저로 염 (Chrome 먼저)
             allowed = [b.exe for b in browser_policy.BROWSERS]

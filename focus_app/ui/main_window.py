@@ -699,10 +699,8 @@ class MainWindow(QMainWindow):
         for e in entries:
             profile.add_app(e.exe)
             self.settings.remember_app(e.exe, e.name, e.path)
-        # 웹 앱(Google Keep 등)은 사이트 제한을 켜면 그 주소도 허용해야 열림 -> 허용 사이트에 미리 넣음
-        extra = web_apps.sites_for_new_apps([e.exe for e in entries], profile.normalized_sites())
-        profile.allowed_sites += extra
-        self.settings.remember_sites(extra)
+        # 웹 앱(Google Keep 등)의 주소는 사이트 목록에 넣지 않고 기억만 함 (사이트 제한 때 뒤에서 허용)
+        web_apps.learn_sites(self.settings, [e.exe for e in entries])
         self.settings_changed.emit()
         self._refresh_mode_item()
         self._reload_apps()
@@ -1110,7 +1108,8 @@ class MainWindow(QMainWindow):
             item.setToolTip(f"눌러서 {site.lstrip('.')} 열기")
             self.run_sites.addItem(item)
         if not sites:
-            self.run_sites.addItem("(없음 — 내 PC의 파일만 열 수 있습니다)")
+            self.run_sites.addItem("(없음 — 허용한 웹 앱과 내 PC의 파일만 열 수 있습니다)" if profile.web_apps()
+                                   else "(없음 — 내 PC의 파일만 열 수 있습니다)")
 
     def set_site_status(self, text: str, can_restart: bool) -> None:
         """사이트 제한 상태 띠. text가 비면 숨김."""

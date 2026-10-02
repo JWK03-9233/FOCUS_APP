@@ -84,19 +84,21 @@ def browser_name(exe: str) -> str:
 
 
 # ---------------------------------------------------------------- 무엇을 막을지
-def desired_sites(profile: Optional[Profile]) -> Optional[List[str]]:
+def desired_sites(profile: Optional[Profile], web_app_sites: Iterable[str] = ()) -> Optional[List[str]]:
     """이 모드로 집중할 때 적용할 허용 사이트 목록. 사이트 제한이 필요 없으면 None.
 
     정책을 쓰는 경우: 허용 앱에 지원 브라우저가 있거나, 허용 사이트가 있거나(브라우저를 허용 앱에 넣지 않아도
     그 사이트용으로 열림), 브라우저에 설치한 웹 앱을 허용했을 때(웹 앱 창이 다른 사이트로 못 나가게).
     셋 다 아니면 브라우저 자체가 막히므로 정책을 쓰지 않습니다.
+
+    web_app_sites: 허용한 웹 앱의 주소 (Settings.web_app_sites). 사이트 목록에 안 보여도 뒤에서 같이 허용합니다.
     """
     if profile is None or not profile.limits_sites():
         return None
     browser_allowed = any(exe in SUPPORTED_EXES for exe in profile.normalized_apps())
     if not (browser_allowed or profile.browses_sites() or profile.web_apps()):
         return None
-    return profile.normalized_sites()
+    return list(dict.fromkeys([*profile.normalized_sites(), *web_app_sites]))
 
 
 def unsupported_browsers(profile: Profile) -> List[str]:

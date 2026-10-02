@@ -152,10 +152,8 @@ class AllowedAppsDialog(QDialog):
             if exe and exe not in self._apps:
                 self._apps.append(exe)
                 self._new_entries[exe] = e
-        # 웹 앱(Google Keep 등)은 사이트 제한을 켜면 그 주소도 허용해야 열림 -> 허용 사이트에 미리 넣음
-        extra = web_apps.sites_for_new_apps([e.exe for e in entries], self.sites.sites)
-        if extra:
-            self.sites.set_values(self.sites.restrict, self.sites.sites + extra)
+        # 웹 앱(Google Keep 등)의 주소는 사이트 목록에 넣지 않고 기억만 함 (앱을 허용해야만 뒤에서 허용됨)
+        web_apps.learn_sites(self.settings, [e.exe for e in entries])
         self._reload()
 
     def remove_app(self, exe: str) -> None:

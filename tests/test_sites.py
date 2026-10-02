@@ -427,3 +427,62 @@ def test_controller_remove_apps_without_code(qapp, monkeypatch):
     finally:
         ctl._end_session("manual")
         _close(ctl)
+
+
+KEEP = "chrome.exe|" + "a" * 32
+
+
+def test_web_app_browser_counts_for_restart_notice(qapp, monkeypatch):
+    """웹 앱만 허용해도 그 브라우저가 다시 시작 안내·버튼 대상이어야 함 (안 그러면 안내 없이 최소화만 됨)."""
+    from focus_app import app as app_mod
+
+    ctl = app_mod.FocusApp(qapp, show_window=False)
+    try:
+        p = ctl.settings.current_profile()
+        p.allowed_apps = ["code.exe", KEEP]
+        p.restrict_sites, p.allowed_sites = True, []
+        ctl.start_focus(p.name, 30)
+        assert ctl._desired_sites() == []
+        assert ctl._allowed_browsers() == ["chrome.exe"]
+        ctl._policy_state = ([], time.time())
+        monkeypatch.setattr(browser_policy, "stale_browsers", lambda exes, at: [e for e in exes if e == "chrome.exe"])
+        shown = []
+        monkeypatch.setattr(ctl.window, "set_site_status", lambda text, can: shown.append((text, can)))
+        ctl._refresh_site_status()
+        assert shown[-1][1] and "Chrome" in shown[-1][0]  # 안내 + 다시 시작 버튼
+    finally:
+        ctl._end_session("manual")
+        _close(ctl)
+
+
+def test_web_app_site_is_allowed_behind_the_scenes(qapp, monkeypatch):
+    """웹 앱 주소는 사이트 목록에 안 보이고, 정책(앱·도우미 둘 다)에서만 같이 허용."""
+    from focus_app import app as app_mod, web_apps
+
+    monkeypatch.setattr(web_apps, "start_host", lambda exe, app_id: "keep.google.com")
+    ctl = app_mod.FocusApp(qapp, show_window=False)
+    try:
+        p = ctl.settings.current_profile()
+        p.allowed_apps = ["code.exe", KEEP]
+        p.restrict_sites, p.allowed_sites = True, ["notion.so"]
+        ctl.start_focus(p.name, 30)
+        assert p.normalized_sites() == ["notion.so"]  # 보이는 목록은 그대로
+        assert ctl._desired_sites() == ["notion.so", "keep.google.com"]
+        saved = Settings.load()  # 도우미가 읽는 설정에도 기억돼 있어야 함
+        assert browser_policy.desired_sites(saved.get_profile(p.name), saved.web_app_sites(saved.get_profile(p.name)))             == ["notion.so", "keep.google.com"]
+        assert ctl.window.run_sites.count() == 1  # 진행 화면에도 웹 앱 주소는 안 보임
+    finally:
+        ctl._end_session("manual")
+        _close(ctl)
+
+
+def test_web_app_site_only_counts_while_app_is_allowed():
+    s = Settings()
+    p = s.current_profile()
+    p.allowed_apps, p.restrict_sites = [KEEP], True
+    assert s.remember_web_app_site(KEEP, "https://keep.google.com/")
+    assert s.web_app_sites(p) == ["keep.google.com"]
+    assert browser_policy.desired_sites(p, s.web_app_sites(p)) == ["keep.google.com"]
+    p.allowed_apps = ["code.exe"]  # 앱을 빼면 주소도 허용 안 함
+    assert s.web_app_sites(p) == []
+    assert Settings.from_dict(s.to_dict()).app_info[KEEP]["site"] == "keep.google.com"  # 저장·불러오기
