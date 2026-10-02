@@ -5,6 +5,7 @@
 * 강조색(ACCENT): 체크박스·라디오·포커스 테두리·선택 표시. 채우는 곳(기본 버튼·고른 시간·진행 막대)은 그라데이션
 * 뜻이 있는 색은 따로: 실행 중·완료는 에메랄드(SUCCESS), 경고는 앰버(WARN), 위험은 로즈(DANGER)
 * 모서리는 둥글게: 버튼·입력칸 9px, 카드 14px, 칩·작은 버튼은 알약 모양
+  (알약 모양의 반지름은 버튼 높이의 절반보다 넉넉히 작게: 넘으면 Qt가 모서리를 아예 각지게 그림)
 * 각 대화상자의 기본 버튼(저장·추가·확인·시작)은 그라데이션으로 채우고, 나머지 버튼은 옅은 회색
 * 화면 확대·축소는 이 스타일의 pt/px 값을 비율대로 바꿔 다시 적용합니다 (``build_stylesheet``).
   그래서 글자 크기·여백은 위젯에 직접 쓰지 말고 여기에 objectName으로 둡니다.
@@ -178,7 +179,7 @@ QPushButton#primary {{
     font-size: 10.5pt;
     font-weight: 600;
     padding: 10px 26px;
-    border-radius: 19px;
+    border-radius: 16px;
 }}
 QPushButton#primary:hover {{ background: {GRADIENT_HOVER}; }}
 QPushButton#primary:pressed {{ background: {GRADIENT_PRESSED}; }}
@@ -190,7 +191,7 @@ QPushButton#secondary {{
     background: transparent;
     font-weight: 600;
     padding: 6px 14px;
-    border-radius: 15px;
+    border-radius: 12px;
 }}
 QPushButton#secondary:hover {{ background: {tint(ACCENT, 0.14)}; }}
 QPushButton#secondary:pressed {{ background: {tint(ACCENT, 0.24)}; }}
@@ -199,7 +200,7 @@ QPushButton#secondary:disabled {{ border-color: {LINE}; color: palette(placehold
 QPushButton#chip {{
     padding: 5px 12px;
     border: 1px solid {LINE};
-    border-radius: 14px;
+    border-radius: 11px;
     background: transparent;
 }}
 QPushButton#chip:hover {{ background: {SOFT}; }}
@@ -237,7 +238,7 @@ QPushButton#danger {{
     color: {DANGER};
     background: transparent;
     padding: 9px 21px;
-    border-radius: 17px;
+    border-radius: 14px;
     font-weight: 600;
 }}
 QPushButton#danger:hover {{ background: {tint(DANGER, 0.12)}; }}
