@@ -549,23 +549,35 @@ class FocusApp:
             log.info("집중 시간 %d분 추가", minutes)
 
     def change_mode_during_focus(self) -> None:
-        """짧은 해제 문자열(16글자)을 입력하면 집중을 끝내지 않고 다른 모드로 바꿉니다."""
+        """집중을 끝내지 않고 다른 모드로 바꿉니다.
+
+        모드 목록에서 아래쪽 모드일수록 더 많이 허용하는 편이라, 지금보다 아래쪽 모드로 바꿀 때만
+        짧은 해제 문자열(16글자)을 요구하고 위쪽 모드로는 바로 바꿉니다.
+        """
         if not self.active or self._dialog_open:
             return
-        names = [n for n in self.settings.profile_names() if n != self.session.profile]
+        session = self.session
+        all_names = self.settings.profile_names()
+        names = [n for n in all_names if n != session.profile]
         if not names:
             return
-        if not self._confirm("모드 변경", length=unlock.EDIT_LENGTH):
-            return
-        session = self.session
-        if session is None:
-            return  # 입력하는 사이 집중이 끝났음
         self._dialog_open = True
         try:
             name = self._ask_mode(names)
-            profile = self.settings.get_profile(name) if name else None
-            if profile is None:
+        finally:
+            self._dialog_open = False
+        profile = self.settings.get_profile(name) if name else None
+        if profile is None or self.session is not session:
+            return
+        # 지금 모드가 목록에 없으면(지워졌거나 이름이 바뀜) 위아래를 알 수 없으니 해제 문자열을 요구
+        current = all_names.index(session.profile) if session.profile in all_names else -1
+        if current < 0 or all_names.index(profile.name) > current:
+            if not self._confirm("모드 변경", length=unlock.EDIT_LENGTH):
                 return
+            if self.session is not session:
+                return  # 입력하는 사이 집중이 끝났음
+        self._dialog_open = True
+        try:
             minutes = None
             if session.ends_at is not None and self._ask_yes(
                 "모드 변경", f"'{profile.name}' 모드로 바꾸면서 집중 시간도 늘릴까요?"

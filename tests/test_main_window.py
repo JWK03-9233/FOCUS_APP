@@ -1051,20 +1051,23 @@ def test_add_time_during_focus_needs_no_code(qapp, monkeypatch):
         _close(ctl)
 
 
-def test_change_mode_during_focus_requires_short_code_and_asks_time(qapp, monkeypatch):
+def test_change_mode_during_focus_code_only_when_moving_down(qapp, monkeypatch):
+    """목록 아래쪽 모드(보통 더 많이 허용)로 바꿀 때만 해제 문자열을 요구하고, 위쪽으로는 바로 바꿈."""
     ctl = _controller(qapp)
     try:
         first, second = ctl.settings.profile_names()[:2]
         ctl.start_focus(first, 30)
         session, before = ctl.session, ctl.session.ends_at
 
+        # 위 -> 아래: 문자열을 틀리면(취소하면) 바뀌지 않음
         lengths = []
+        monkeypatch.setattr(ctl, "_ask_mode", lambda names: second)
         monkeypatch.setattr(ctl, "_confirm", lambda purpose, length=None: lengths.append(length) or False)
         ctl.change_mode_during_focus()
         assert lengths == [16] and ctl.session.profile == first
 
+        # 위 -> 아래: 문자열을 맞히면 바뀌고 시간도 늘릴 수 있음
         monkeypatch.setattr(ctl, "_confirm", lambda purpose, length=None: True)
-        monkeypatch.setattr(ctl, "_ask_mode", lambda names: second)
         asked = []
         monkeypatch.setattr(ctl, "_ask_yes", lambda title, text: asked.append(text) or True)
         monkeypatch.setattr(ctl, "_ask_minutes", lambda title: 15)
@@ -1074,12 +1077,15 @@ def test_change_mode_during_focus_requires_short_code_and_asks_time(qapp, monkey
         assert ctl.monitor.profile.name == second
         assert FocusSession.load().profile == second  # 도우미도 새 모드를 따름
 
+        # 아래 -> 위: 해제 문자열 없이 바로 바뀜
+        monkeypatch.setattr(ctl, "_confirm", lambda *a, **k: pytest.fail("위쪽 모드로는 해제 문자열이 필요 없음"))
         monkeypatch.setattr(ctl, "_ask_mode", lambda names: first)
         monkeypatch.setattr(ctl, "_ask_yes", lambda title, text: False)  # 시간은 그대로
         monkeypatch.setattr(ctl, "_ask_minutes", lambda title: pytest.fail("묻지 않아야 함"))
         ends = ctl.session.ends_at
         ctl.change_mode_during_focus()
         assert ctl.session.profile == first and ctl.session.ends_at == ends
+        assert FocusSession.load().profile == first
     finally:
         ctl._end_session("manual")
         _close(ctl)

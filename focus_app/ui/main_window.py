@@ -981,7 +981,7 @@ class MainWindow(QMainWindow):
 
         self.add_time_btn = item("시간 추가…", "해제 문자열 없이 집중 시간을 늘립니다", self.add_time_requested)
         self.change_mode_btn = item(
-            "모드 변경…", "짧은 해제 문자열을 입력하면 집중을 끝내지 않고 다른 모드로 바꿉니다", self.change_mode_requested
+            "모드 변경…", "집중을 끝내지 않고 다른 모드로 바꿉니다 (목록에서 아래쪽 모드로 바꿀 때만 짧은 해제 문자열 필요)", self.change_mode_requested
         )
         self.run_menu.addSeparator()
         self.edit_apps_btn = item(
