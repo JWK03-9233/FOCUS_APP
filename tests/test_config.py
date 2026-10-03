@@ -73,3 +73,22 @@ def test_profile_management_rules():
     s.remove_profile("업무용")
     with pytest.raises(ValueError):
         s.remove_profile("자유 시간")
+
+
+def test_add_profile_inherits_from_base():
+    s = Settings()
+    src = s.get_profile("업무용")
+    src.restrict_sites = True
+    src.add_site("notion.so")
+    p = s.add_profile("코딩", base="업무용")
+    assert p.normalized_apps() == src.normalized_apps()
+    assert p.normalized_sites() == ["notion.so"] and p.restrict_sites and p.block_everything
+    p.add_app("obsidian.exe")
+    p.remove_app("code.exe")
+    p.remove_site("notion.so")
+    assert "code.exe" in src.normalized_apps() and "obsidian.exe" not in src.normalized_apps()  # 원본은 그대로
+    assert src.normalized_sites() == ["notion.so"]
+    assert not s.add_profile("쉬기", base="자유 시간").block_everything
+    assert s.add_profile("빈 모드").allowed_apps == []
+    with pytest.raises(ValueError):
+        s.add_profile("없는 데서", base="없는 모드")

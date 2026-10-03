@@ -40,6 +40,7 @@ from focus_app.config import Profile, Settings, app_kind_label
 from focus_app.session import FocusSession, format_duration, format_minutes
 from focus_app.ui import app_catalog, icons, theme
 from focus_app.ui.app_picker import AppPickerDialog
+from focus_app.ui.new_mode_dialog import NewModeDialog
 from focus_app.ui.preset_dialog import PresetDialog
 from focus_app.ui.scroll import ExpandedList, WindowScroll
 from focus_app.ui.site_list import SiteEditor
@@ -612,17 +613,24 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- 모드 편집
     def _add_mode(self) -> None:
-        name, ok = QInputDialog.getText(self, "새 모드", "모드 이름 (예: 시험 공부, 글쓰기):")
-        if not ok or not name.strip():
+        dlg = NewModeDialog(self.settings.profiles, parent=self)
+        try:
+            if dlg.exec() != NewModeDialog.DialogCode.Accepted:
+                return
+            name, base = dlg.name(), dlg.base()
+        finally:
+            dlg.deleteLater()
+        if not name:
             return
         try:
-            self.settings.add_profile(name)
+            self.settings.add_profile(name, base=base)
         except ValueError as exc:
             QMessageBox.warning(self, "새 모드", str(exc))
             return
         self.settings_changed.emit()
-        self.reload_modes(select=name.strip())
-        self._add_apps()  # 만들자마자 쓸 앱을 고르게 함
+        self.reload_modes(select=name)
+        if not base:
+            self._add_apps()  # 빈 모드는 만들자마자 쓸 앱을 고르게 함 (이어받은 모드는 목록을 보고 고침)
 
     def _rename_mode(self) -> None:
         p = self.current_mode()

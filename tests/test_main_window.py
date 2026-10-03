@@ -1089,3 +1089,33 @@ def test_change_mode_during_focus_code_only_when_moving_down(qapp, monkeypatch):
     finally:
         ctl._end_session("manual")
         _close(ctl)
+
+
+def test_new_mode_dialog_inherits_apps(qapp, monkeypatch):
+    from focus_app.ui.new_mode_dialog import NewModeDialog
+
+    s, w = make_window(qapp)
+    picked = []
+    monkeypatch.setattr(w, "_add_apps", lambda: picked.append(1))
+
+    def fake_exec(self):
+        assert not self.ok_btn.isEnabled()  # 이름이 없으면 만들 수 없음
+        self.name_edit.setText("  코딩  ")
+        self.base_combo.setCurrentIndex(self.base_combo.findData("업무용"))
+        return 1  # Accepted
+
+    monkeypatch.setattr(NewModeDialog, "exec", fake_exec)
+    w._add_mode()
+    p = s.get_profile("코딩")
+    assert p is not None and w.current_mode() is p
+    assert p.normalized_apps() == s.get_profile("업무용").normalized_apps()
+    assert not picked  # 이어받은 모드는 앱 고르기 창을 바로 띄우지 않음
+
+    def fake_exec_empty(self):
+        self.name_edit.setText("글쓰기")
+        return 1
+
+    monkeypatch.setattr(NewModeDialog, "exec", fake_exec_empty)
+    w._add_mode()
+    assert s.get_profile("글쓰기").allowed_apps == []
+    assert picked == [1]  # 빈 모드는 바로 앱을 고르게 함

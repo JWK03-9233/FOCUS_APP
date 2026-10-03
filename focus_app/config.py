@@ -350,13 +350,26 @@ class Settings:
             self.active_profile = p.name
         return p
 
-    def add_profile(self, name: str) -> Profile:
+    def add_profile(self, name: str, base: str = "") -> Profile:
+        """새 프로필을 만듭니다. base를 주면 그 프로필의 앱·사이트·차단 설정을 그대로 이어받습니다."""
         name = name.strip()
         if not name:
             raise ValueError("프로필 이름이 비어 있습니다.")
         if self.get_profile(name) is not None:
             raise ValueError(f"이미 존재하는 프로필입니다: {name}")
-        p = Profile(name)
+        src = self.get_profile(base) if base else None
+        if base and src is None:
+            raise ValueError(f"프로필을 찾을 수 없습니다: {base}")
+        if src is None:
+            p = Profile(name)
+        else:
+            p = Profile(
+                name,
+                allowed_apps=list(src.allowed_apps),
+                block_everything=src.block_everything,
+                restrict_sites=src.restrict_sites,
+                allowed_sites=list(src.allowed_sites),
+            )
         self.profiles.append(p)
         return p
 
