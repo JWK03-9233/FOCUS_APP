@@ -56,6 +56,16 @@ class PreferencesDialog(QDialog):
         self.code_len.setSuffix(" 글자")
         self.code_len.setValue(settings.unlock_code_length)
         form.addRow(_field_label("해제 문자열 길이"), self.code_len)
+        self.edit_len = QSpinBox()
+        self.edit_len.setRange(unlock.EDIT_LENGTH, unlock.MAX_LENGTH)
+        self.edit_len.setSingleStep(8)
+        self.edit_len.setSuffix(" 글자")
+        self.edit_len.setValue(settings.edit_code_length)
+        form.addRow(_field_label("편집 문자열 길이"), self.edit_len)
+        form.addRow(_field_label(""), _hint(
+            f"집중 중에 허용 앱·사이트를 추가하거나 더 많이 허용하는 모드로 바꿀 때 입력하는 문자열 길이입니다 "
+            f"({unlock.EDIT_LENGTH}~{unlock.MAX_LENGTH}글자)."
+        ))
         self.code_kind = QComboBox()
         for key, (label, _groups) in unlock.COMPLEXITY.items():
             self.code_kind.addItem(label, key)
@@ -202,6 +212,7 @@ class PreferencesDialog(QDialog):
     def _save(self) -> None:
         s = self.settings
         s.unlock_code_length = int(self.code_len.value())
+        s.edit_code_length = int(self.edit_len.value())
         s.unlock_code_complexity = str(self.code_kind.currentData())
         s.require_unlock_for_quit = self.quit_check.isChecked()
         s.block_task_manager = self.strict_check.isChecked()

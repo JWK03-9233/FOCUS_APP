@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from focus_app.unlock import EDIT_LENGTH as UNLOCK_EDIT_LENGTH
 from focus_app.unlock import MAX_LENGTH as UNLOCK_MAX_LENGTH
 from focus_app.unlock import MIN_LENGTH as UNLOCK_MIN_LENGTH
 from focus_app.unlock import clean_complexity
@@ -307,6 +308,7 @@ class Settings:
     active_profile: str = "공부용"
     poll_interval_ms: int = 300  # 포그라운드 창 확인 주기
     unlock_code_length: int = 32  # 해제용 랜덤 문자열 길이 (32~256)
+    edit_code_length: int = 16  # 집중 중 허용 앱 추가·모드 변경용 문자열 길이 (16~256)
     unlock_code_complexity: str = "basic"  # basic / symbols / max (focus_app.unlock.COMPLEXITY)
     default_duration_minutes: int = 50  # 마지막으로 고른 집중 시간. 0이면 "끝낼 때까지"
     duration_presets: List[int] = field(default_factory=lambda: list(DEFAULT_DURATION_PRESETS))
@@ -485,6 +487,7 @@ class Settings:
             setattr(settings, f.name, value)
         settings.poll_interval_ms = max(100, min(5000, settings.poll_interval_ms))
         settings.unlock_code_length = max(UNLOCK_MIN_LENGTH, min(UNLOCK_MAX_LENGTH, settings.unlock_code_length))
+        settings.edit_code_length = max(UNLOCK_EDIT_LENGTH, min(UNLOCK_MAX_LENGTH, settings.edit_code_length))
         settings.unlock_code_complexity = clean_complexity(settings.unlock_code_complexity)
         settings.emergency_delay_minutes = max(1, min(240, settings.emergency_delay_minutes))
         settings.default_duration_minutes = max(0, min(1440, settings.default_duration_minutes))

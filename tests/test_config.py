@@ -52,6 +52,10 @@ def test_settings_load_tolerates_garbage(tmp_path):
     assert s.poll_interval_ms == 100
     assert s.unlock_code_length == 256  # 최대 길이
     assert Settings.from_dict({"unlock_code_length": 10}).unlock_code_length == 32  # 최소 길이
+    assert Settings().edit_code_length == 16  # 편집용 기본 길이
+    assert Settings.from_dict({"edit_code_length": 5}).edit_code_length == 16
+    assert Settings.from_dict({"edit_code_length": 64}).edit_code_length == 64
+    assert Settings.from_dict({"edit_code_length": 1000}).edit_code_length == 256
 
 
 def test_profile_management_rules():
