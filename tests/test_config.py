@@ -132,3 +132,19 @@ def test_ban_mode_saved_and_inherited(tmp_path):
     assert not loaded.get_profile("공부용").bans()
     copy = loaded.add_profile("밴2", base="밴")
     assert copy.bans() and copy.normalized_apps() == ["kakaotalk.exe"]
+
+
+def test_mode_change_needs_code_by_kind_then_order():
+    from focus_app.config import mode_change_needs_code
+
+    allow1, ban, allow2 = Profile("a1"), Profile("ban", ban_apps=True), Profile("a2")
+    free = Profile("free", block_everything=False)
+    names = ["ban", "a1", "free", "a2"]  # Ban 모드를 맨 위로 옮겨 둔 경우
+    assert mode_change_needs_code(names, allow1, ban)  # 덜 엄격한 종류: 위쪽이어도 필요
+    assert mode_change_needs_code(names, ban, free)
+    assert mode_change_needs_code(names, allow1, free)
+    assert not mode_change_needs_code(names, free, ban)  # 더 엄격한 종류: 아래쪽이어도 바로
+    assert not mode_change_needs_code(names, ban, allow2)
+    assert mode_change_needs_code(names, allow1, allow2)  # 같은 종류: 아래쪽만 필요
+    assert not mode_change_needs_code(names, allow2, allow1)
+    assert mode_change_needs_code(names, None, allow1)  # 지금 모드를 모름

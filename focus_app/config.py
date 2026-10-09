@@ -213,6 +213,12 @@ class Profile:
         """고른 앱만 막는 Ban 모드인지 (이때 앱 목록은 막을 앱 목록)."""
         return self.block_everything and self.ban_apps
 
+    def strictness(self) -> int:
+        """모드 종류의 엄격함: 고른 앱만 쓰기(2) > 고른 앱만 막기(1) > 아무것도 막지 않기(0)."""
+        if not self.block_everything:
+            return 0
+        return 1 if self.ban_apps else 2
+
     def allows(self, exe_name: str) -> bool:
         if not self.block_everything:
             return True
@@ -282,6 +288,20 @@ class Profile:
 
     def remove_site(self, site: str) -> None:
         self.allowed_sites = [s for s in self.allowed_sites if normalize_site(s) != site]
+
+
+def mode_change_needs_code(names: List[str], current: Optional[Profile], target: Profile) -> bool:
+    """집중 중 current 모드에서 target 모드로 바꿀 때 해제 문자열이 필요한지.
+
+    모드 종류가 덜 엄격해지면(예: 고른 앱만 쓰기 -> Ban) 목록 순서와 상관없이 필요하고, 더 엄격해지면 필요 없음.
+    같은 종류끼리는 목록 아래쪽 모드(보통 더 많이 허용)로 바꿀 때만 필요. 지금 모드를 모르면(지워졌거나
+    이름이 바뀜) 비교할 수 없으니 필요.
+    """
+    if current is None or current.name not in names or target.name not in names:
+        return True
+    if target.strictness() != current.strictness():
+        return target.strictness() < current.strictness()
+    return names.index(target.name) > names.index(current.name)
 
 
 def default_profiles() -> List[Profile]:

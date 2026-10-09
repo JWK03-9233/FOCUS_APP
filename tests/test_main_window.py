@@ -1200,3 +1200,32 @@ def test_controller_ban_mode_session(qapp, monkeypatch):
     finally:
         ctl._end_session("manual")
         _close(ctl)
+
+
+def test_change_mode_to_ban_above_needs_code(qapp, monkeypatch):
+    """Ban 모드를 목록 위로 옮겨 둬도, 고른 앱만 쓰기 -> Ban으로 바꿀 때는 해제 문자열을 요구."""
+    ctl = _controller(qapp)
+    try:
+        ban = ctl.settings.add_profile("밴")
+        ban.ban_apps = True
+        first = ctl.settings.profile_names()[0]
+        ctl.settings.reorder_profiles(["밴"])
+        ctl.start_focus(first, 30)
+        lengths = []
+        monkeypatch.setattr(ctl, "_ask_mode", lambda names: "밴")
+        monkeypatch.setattr(ctl, "_confirm", lambda purpose, length=None: lengths.append(length) or False)
+        ctl.change_mode_during_focus()
+        assert lengths == [16] and ctl.session.profile == first
+
+        # Ban -> 고른 앱만 쓰기는 더 엄격해지므로 바로 바뀜
+        monkeypatch.setattr(ctl, "_confirm", lambda *a, **k: True)
+        monkeypatch.setattr(ctl, "_ask_yes", lambda title, text: False)
+        ctl.change_mode_during_focus()
+        assert ctl.session.profile == "밴" and ctl.monitor.profile.bans()
+        monkeypatch.setattr(ctl, "_confirm", lambda *a, **k: pytest.fail("더 엄격한 종류로는 해제 문자열이 필요 없음"))
+        monkeypatch.setattr(ctl, "_ask_mode", lambda names: first)
+        ctl.change_mode_during_focus()
+        assert ctl.session.profile == first and not ctl.monitor.profile.bans()
+    finally:
+        ctl._end_session("manual")
+        _close(ctl)

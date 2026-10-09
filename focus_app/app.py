@@ -12,7 +12,7 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QDialog, QInputDialog, QMenu, QMessageBox, QSystemTrayIcon
 
 from focus_app import browser_policy, helper, taskmgr_lock, unlock, updater, web_apps, winapi
-from focus_app.config import Profile, Settings, data_dir, site_url, split_web_app
+from focus_app.config import Profile, Settings, data_dir, mode_change_needs_code, site_url, split_web_app
 from focus_app.enforcer import ForegroundWindow
 from focus_app.monitor import AllowlistMonitor
 from focus_app.session import FocusSession, format_duration
@@ -556,8 +556,8 @@ class FocusApp:
     def change_mode_during_focus(self) -> None:
         """집중을 끝내지 않고 다른 모드로 바꿉니다.
 
-        모드 목록에서 아래쪽 모드일수록 더 많이 허용하는 편이라, 지금보다 아래쪽 모드로 바꿀 때만
-        짧은 해제 문자열(설정의 '편집 문자열 길이')을 요구하고 위쪽 모드로는 바로 바꿉니다.
+        덜 엄격한 종류의 모드(고른 앱만 쓰기 -> Ban -> 막지 않기 방향)로 바꾸거나, 같은 종류에서 목록 아래쪽
+        모드로 바꿀 때만 짧은 해제 문자열(설정의 '편집 문자열 길이')을 요구합니다 (config.mode_change_needs_code).
         """
         if not self.active or self._dialog_open:
             return
@@ -574,9 +574,8 @@ class FocusApp:
         profile = self.settings.get_profile(name) if name else None
         if profile is None or self.session is not session:
             return
-        # 지금 모드가 목록에 없으면(지워졌거나 이름이 바뀜) 위아래를 알 수 없으니 해제 문자열을 요구
-        current = all_names.index(session.profile) if session.profile in all_names else -1
-        if current < 0 or all_names.index(profile.name) > current:
+        current = self.settings.get_profile(session.profile)
+        if mode_change_needs_code(all_names, current, profile):
             if not self._confirm("모드 변경", length=self.settings.edit_code_length):
                 return
             if self.session is not session:
