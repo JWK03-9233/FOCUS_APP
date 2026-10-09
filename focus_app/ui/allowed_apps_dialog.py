@@ -2,6 +2,7 @@
 
 - 편집: 해제 문자열을 입력한 뒤에만 열림. 추가·빼기 모두 가능.
 - 빼기만(``remove_only``): 해제 문자열 없이 열림. 지금 허용된 앱·사이트를 빼기만 할 수 있음.
+  Ban 모드(고른 앱만 막기)에서는 거꾸로 막을 앱을 더하기만 할 수 있음 (어느 쪽이든 더 엄격해질 뿐).
 
 타이머와 차단은 그대로 계속되며, 저장하면 바뀐 목록이 즉시 적용되고 모드에도 저장됩니다.
 """
@@ -42,22 +43,30 @@ class AllowedAppsDialog(QDialog):
         super().__init__(parent)
         self.settings = settings
         self.remove_only = remove_only
+        self.ban = profile.bans()
+        # 해제 문자열 없이 열었으면 더 엄격해지는 쪽만: 허용 목록은 빼기만, 막을 목록(Ban 모드)은 더하기만
+        self.can_add = not remove_only or self.ban
+        self.can_remove = not remove_only or not self.ban
         self._on_settings_changed = on_settings_changed
         self.profile_name = profile.name
         self._apps: List[str] = profile.normalized_apps()  # 저장 전까지는 복사본만 고침
         self._new_entries: Dict[str, AppEntry] = {}
         self._helper_installed = helper_installed
-        self.setWindowTitle("허용 앱·사이트 빼기" if remove_only else "허용 앱·사이트 편집")
+        if self.ban:
+            self.setWindowTitle("막을 앱 더하기" if remove_only else "막을 앱 편집")
+        else:
+            self.setWindowTitle("허용 앱·사이트 빼기" if remove_only else "허용 앱·사이트 편집")
         self.setMinimumSize(500, 600)
 
         layout = scroll_layout(self)  # 내용이 많으면 창 전체를 스크롤
         layout.setSpacing(10)
-        title = QLabel(f"<b>{profile.name}</b> 모드의 허용 앱과 사이트")
+        title = QLabel(f"<b>{profile.name}</b> 모드의 " + ("막을 앱" if self.ban else "허용 앱과 사이트"))
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
+        only = " 여기서는 더하기만 할 수 있습니다." if self.ban else " 여기서는 빼기만 할 수 있습니다."
         hint = QLabel(
             "집중은 그대로 계속됩니다. 저장하면 바뀐 목록이 바로 적용됩니다."
-            + (" 여기서는 빼기만 할 수 있습니다." if remove_only else "")
+            + (only if remove_only else "")
         )
         hint.setObjectName("muted")
         hint.setWordWrap(True)
@@ -70,7 +79,7 @@ class AllowedAppsDialog(QDialog):
         add = QPushButton("+  앱 추가")
         add.setObjectName("secondary")
         add.clicked.connect(self._add)
-        add.setVisible(not remove_only)
+        add.setVisible(self.can_add)
         head.addWidget(add)
         layout.addLayout(head)
 
@@ -82,6 +91,7 @@ class AllowedAppsDialog(QDialog):
         self.sites = SiteEditor()
         self.sites.set_values(profile.restrict_sites, profile.normalized_sites(), settings.saved_sites)
         self.sites.set_remove_only(remove_only)
+        self.sites.setVisible(not self.ban)  # Ban 모드는 사이트를 제한하지 않음
         layout.addWidget(self.sites, 2)
 
         buttons = QHBoxLayout()
@@ -106,10 +116,11 @@ class AllowedAppsDialog(QDialog):
 
     def _reload(self) -> None:
         self.list.clear()
-        self.count.setText(f"쓸 수 있는 앱 ({len(self._apps)}개)")
+        self.count.setText(f"{'막을 앱' if self.ban else '쓸 수 있는 앱'} ({len(self._apps)}개)")
         self.sites.set_context(self._apps, self._helper_installed)
         for exe in self._apps:
             row = AppRow(self._name(exe), exe, self._path(exe), self.remove_app)
+            row.remove_btn.setVisible(self.can_remove)
             self.list.add_row(row, 40)
 
     def _add(self) -> None:
@@ -123,6 +134,7 @@ class AllowedAppsDialog(QDialog):
             on_hidden_changed=self._save_hidden_apps,
             app_names=self.settings.app_display_name,
             app_paths=self._path,
+            ban=self.ban,
         )
         try:
             if dlg.exec() != AppPickerDialog.DialogCode.Accepted:
@@ -145,7 +157,7 @@ class AllowedAppsDialog(QDialog):
             self._on_settings_changed()
 
     def add_entries(self, entries: List[AppEntry]) -> None:
-        if self.remove_only:
+        if not self.can_add:
             return
         for e in entries:
             exe = normalize_exe(e.exe)
@@ -157,6 +169,8 @@ class AllowedAppsDialog(QDialog):
         self._reload()
 
     def remove_app(self, exe: str) -> None:
+        if not self.can_remove:
+            return
         exe = normalize_exe(exe)
         self._apps = [a for a in self._apps if a != exe]
         self._reload()
@@ -166,6 +180,12 @@ class AllowedAppsDialog(QDialog):
         profile = settings.get_profile(self.profile_name)
         if profile is None:
             raise ValueError(f"모드를 찾을 수 없습니다: {self.profile_name}")
+        if self.remove_only and self.ban:
+            # 막을 앱 더하기만: 원래 막던 앱은 모두 그대로 둠 (어떤 경로로도 빠지지 않게 한 번 더 확인)
+            before_apps = profile.normalized_apps()
+            profile.allowed_apps = before_apps + [a for a in self._apps if a not in before_apps]
+            self._remember_new(settings)
+            return profile
         if self.remove_only:
             # 빼기만: 원래 목록에 있던 것만 남김 (어떤 경로로도 추가되지 않게 한 번 더 확인)
             before_apps, before_sites = profile.normalized_apps(), profile.normalized_sites()
@@ -180,7 +200,10 @@ class AllowedAppsDialog(QDialog):
         for other in settings.profiles:
             for site in gone:
                 other.remove_site(site)
+        self._remember_new(settings)
+        return profile
+
+    def _remember_new(self, settings: Settings) -> None:
         for exe, e in self._new_entries.items():
             if exe in self._apps:
                 settings.remember_app(exe, e.name, e.path)
-        return profile

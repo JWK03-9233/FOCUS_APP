@@ -190,7 +190,7 @@ def run_helper(base: Optional[Path] = None) -> int:
             settings_mtime = mtime
             settings = Settings.load(base / "settings.json")
         profile = settings.get_profile(session.profile) or settings.current_profile()
-        key = (profile.name, profile.block_everything, tuple(profile.normalized_apps()))
+        key = (profile.name, profile.block_everything, profile.ban_apps, tuple(profile.normalized_apps()))
         if monitor is None or key != profile_key:
             monitor = AllowlistMonitor(profile, handles=lambda w: helper_handles(w, main_pid))
             profile_key = key

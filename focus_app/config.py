@@ -198,6 +198,8 @@ class Profile:
     # True면 브라우저(Chrome·Edge 등)에서 allowed_sites만 열 수 있음 (focus_app.browser_policy)
     restrict_sites: bool = False
     allowed_sites: List[str] = field(default_factory=list)  # normalize_site로 정리한 주소 (예: "notion.so")
+    # True면 Ban 모드: allowed_apps에 고른 앱만 막고 나머지는 모두 허용 (block_everything이 True일 때만 의미 있음)
+    ban_apps: bool = False
 
     def normalized_apps(self) -> List[str]:
         seen: List[str] = []
@@ -207,13 +209,26 @@ class Profile:
                 seen.append(n)
         return seen
 
+    def bans(self) -> bool:
+        """고른 앱만 막는 Ban 모드인지 (이때 앱 목록은 막을 앱 목록)."""
+        return self.block_everything and self.ban_apps
+
     def allows(self, exe_name: str) -> bool:
         if not self.block_everything:
             return True
-        return normalize_exe(exe_name) in self.normalized_apps()
+        listed = normalize_exe(exe_name) in self.normalized_apps()
+        return not listed if self.ban_apps else listed
 
     def allows_window(self, exe_name: str, aumid: str = "") -> bool:
-        """이 창을 허용하는지. 브라우저를 허용하지 않았어도 허용한 웹 앱의 창이면 허용합니다."""
+        """이 창을 허용하는지. 브라우저를 허용하지 않았어도 허용한 웹 앱의 창이면 허용합니다.
+
+        Ban 모드에서는 반대로, 막을 앱이나 막을 웹 앱(브라우저는 그대로 둠)의 창만 허용하지 않습니다.
+        """
+        if self.bans():
+            if not self.allows(exe_name):
+                return False
+            exe = normalize_exe(exe_name)
+            return not (aumid and any(b == exe and app_id_matches(aumid, a) for b, a in self.web_apps()))
         if self.allows(exe_name):
             return True
         exe = normalize_exe(exe_name)
@@ -246,8 +261,8 @@ class Profile:
         return list(dict.fromkeys(s for s in (normalize_site(x) for x in self.allowed_sites) if s))
 
     def limits_sites(self) -> bool:
-        """집중 중 브라우저에서 고른 사이트만 열게 하는 모드인지."""
-        return self.block_everything and self.restrict_sites
+        """집중 중 브라우저에서 고른 사이트만 열게 하는 모드인지 (Ban 모드는 사이트를 제한하지 않음)."""
+        return self.block_everything and self.restrict_sites and not self.ban_apps
 
     def browses_sites(self) -> bool:
         """허용 사이트가 있어, 브라우저(Chrome·Edge·웨일·Brave)를 허용 앱에 넣지 않았어도 그 사이트용으로 쓰는지.
@@ -367,6 +382,7 @@ class Settings:
                 name,
                 allowed_apps=list(src.allowed_apps),
                 block_everything=src.block_everything,
+                ban_apps=src.ban_apps,
                 restrict_sites=src.restrict_sites,
                 allowed_sites=list(src.allowed_sites),
             )
@@ -467,6 +483,7 @@ class Settings:
                         name=str(item["name"]),
                         allowed_apps=[str(a) for a in apps if str(a).strip()],
                         block_everything=bool(item.get("block_everything", True)),
+                        ban_apps=bool(item.get("ban_apps", False)),
                         restrict_sites=bool(item.get("restrict_sites", False)),
                         allowed_sites=[
                             normalize_site(str(x)) for x in (item.get("allowed_sites") or [])

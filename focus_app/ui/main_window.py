@@ -40,7 +40,7 @@ from focus_app.config import Profile, Settings, app_kind_label
 from focus_app.session import FocusSession, format_duration, format_minutes
 from focus_app.ui import app_catalog, icons, theme
 from focus_app.ui.app_picker import AppPickerDialog
-from focus_app.ui.new_mode_dialog import NewModeDialog
+from focus_app.ui.new_mode_dialog import KIND_BAN, KIND_FREE, NewModeDialog
 from focus_app.ui.preset_dialog import PresetDialog
 from focus_app.ui.scroll import ExpandedList, WindowScroll
 from focus_app.ui.site_list import SiteEditor
@@ -51,6 +51,8 @@ CUSTOM_ID = 100000  # 분 값(최대 1440)과 겹치지 않는 id. -1은 Qt가 "
 UNLIMITED_ID = 0
 OPEN_ROLE = Qt.ItemDataRole.UserRole + 1  # 진행 화면의 허용 앱이 지금 실행 중인지
 SITE_ROLE = Qt.ItemDataRole.UserRole + 2  # 진행 화면의 허용 사이트 주소
+EDIT_APPS_TIP = "짧은 해제 문자열을 입력하면 집중을 끝내지 않고 허용 앱 목록을 고칠 수 있습니다"
+REMOVE_APPS_TIP = "해제 문자열 없이 허용 앱·사이트를 목록에서 뺄 수 있습니다 (추가는 안 됨)"
 
 
 def _label(text: str = "", name: str = "", wrap: bool = False) -> QLabel:
@@ -86,6 +88,8 @@ def mode_summary(profile: Profile) -> str:
     if not profile.block_everything:
         return "차단 없음"
     n = len(profile.normalized_apps())
+    if profile.bans():
+        return f"앱 {n}개 막기" if n else "막을 앱 없음"
     text = f"앱 {n}개 허용" if n else "허용한 앱 없음"
     if profile.limits_sites():
         text += f" · 사이트 {len(profile.normalized_sites())}개"
@@ -362,13 +366,13 @@ class MainWindow(QMainWindow):
         rl.addLayout(title_row)
 
         self.block_radio = QRadioButton("고른 앱만 쓰기  —  목록에 없는 앱은 자동으로 최소화")
+        self.ban_radio = QRadioButton("고른 앱만 막기 (Ban)  —  목록에 있는 앱만 자동으로 최소화")
         self.free_radio = QRadioButton("아무것도 막지 않기  —  시간만 잽니다")
         group = QButtonGroup(self)
-        group.addButton(self.block_radio)
-        group.addButton(self.free_radio)
-        self.block_radio.toggled.connect(self._on_block_toggled)
-        rl.addWidget(self.block_radio)
-        rl.addWidget(self.free_radio)
+        for radio in self._mode_radios():
+            group.addButton(radio)
+            radio.toggled.connect(self._on_kind_toggled)
+            rl.addWidget(radio)
 
         # ② 쓸 앱 / 쓸 사이트: 탭처럼 하나씩 보여 줌 (한 화면에 같이 두면 목록이 너무 좁아짐)
         apps_header = QHBoxLayout()
@@ -518,11 +522,12 @@ class MainWindow(QMainWindow):
             return
         self.mode_title.setText(p.name)
         self.delete_btn.setEnabled(len(self.settings.profiles) > 1)
-        for radio in (self.block_radio, self.free_radio):
+        for radio in self._mode_radios():
             radio.blockSignals(True)
-        self.block_radio.setChecked(p.block_everything)
+        self.block_radio.setChecked(p.block_everything and not p.ban_apps)
+        self.ban_radio.setChecked(p.bans())
         self.free_radio.setChecked(not p.block_everything)
-        for radio in (self.block_radio, self.free_radio):
+        for radio in self._mode_radios():
             radio.blockSignals(False)
         self._reload_apps()
         self._update_start_summary()
@@ -531,8 +536,9 @@ class MainWindow(QMainWindow):
         p = self.current_mode()
         if p is None:
             return
-        self.sites_title.setVisible(p.block_everything)
-        if not p.block_everything:
+        uses_sites = p.block_everything and not p.ban_apps  # 막지 않는 모드와 Ban 모드는 사이트를 제한하지 않음
+        self.sites_title.setVisible(uses_sites)
+        if not uses_sites:
             self._show_list_tab(0)
         self._update_sites_title(p)
         self.site_editor.set_values(p.restrict_sites, p.normalized_sites(), self.settings.saved_sites)
@@ -590,10 +596,12 @@ class MainWindow(QMainWindow):
             self.apps_empty.setText("이 모드는 아무 앱도 막지 않습니다.\n집중 시간만 재고 싶을 때 쓰세요.")
             self.apps_stack.setCurrentWidget(self.apps_empty)
             return
-        self.apps_title.setText(f"② 쓸 앱  ({len(apps)}개)")
+        ban = p.bans()
+        self.apps_title.setText(f"② {'막을' if ban else '쓸'} 앱  ({len(apps)}개)")
         if not apps:
             self.apps_empty.setText(
-                "아직 고른 앱이 없습니다.\n\n오른쪽 위 '+ 앱 추가'를 눌러\n집중할 때 쓸 앱을 고르세요."
+                "아직 고른 앱이 없습니다.\n\n오른쪽 위 '+ 앱 추가'를 눌러\n집중할 때 막을 앱을 고르세요." if ban
+                else "아직 고른 앱이 없습니다.\n\n오른쪽 위 '+ 앱 추가'를 눌러\n집중할 때 쓸 앱을 고르세요."
             )
             self.apps_stack.setCurrentWidget(self.apps_empty)
             return
@@ -617,19 +625,22 @@ class MainWindow(QMainWindow):
         try:
             if dlg.exec() != NewModeDialog.DialogCode.Accepted:
                 return
-            name, base = dlg.name(), dlg.base()
+            name, base, kind = dlg.name(), dlg.base(), dlg.kind()
         finally:
             dlg.deleteLater()
         if not name:
             return
         try:
-            self.settings.add_profile(name, base=base)
+            p = self.settings.add_profile(name, base=base)
         except ValueError as exc:
             QMessageBox.warning(self, "새 모드", str(exc))
             return
+        if not base:
+            p.block_everything = kind != KIND_FREE
+            p.ban_apps = kind == KIND_BAN
         self.settings_changed.emit()
         self.reload_modes(select=name)
-        if not base:
+        if not base and p.block_everything:
             self._add_apps()  # 빈 모드는 만들자마자 쓸 앱을 고르게 함 (이어받은 모드는 목록을 보고 고침)
 
     def _rename_mode(self) -> None:
@@ -662,11 +673,16 @@ class MainWindow(QMainWindow):
         self.settings_changed.emit()
         self.reload_modes(select=self.settings.active_profile)
 
-    def _on_block_toggled(self, on: bool) -> None:
+    def _mode_radios(self) -> tuple:
+        return (self.block_radio, self.ban_radio, self.free_radio)
+
+    def _on_kind_toggled(self, on: bool) -> None:
+        """모드 종류(고른 앱만 쓰기 / 고른 앱만 막기 / 막지 않기)를 바꿉니다. 앱 목록은 그대로 둡니다."""
         p = self.current_mode()
-        if p is None:
-            return
-        p.block_everything = on
+        if p is None or not on:
+            return  # 켜진 쪽 하나만 처리 (꺼지는 버튼의 신호는 무시)
+        p.block_everything = not self.free_radio.isChecked()
+        p.ban_apps = self.ban_radio.isChecked()
         self.settings_changed.emit()
         self._refresh_mode_item()
         self._reload_apps()
@@ -686,6 +702,7 @@ class MainWindow(QMainWindow):
             on_hidden_changed=self._save_hidden_apps,
             app_names=self.settings.app_display_name,
             app_paths=self._app_path,
+            ban=p.bans(),
         )
         try:
             if dlg.exec() != AppPickerDialog.DialogCode.Accepted:
@@ -802,6 +819,9 @@ class MainWindow(QMainWindow):
         when = "직접 끝낼 때까지" if minutes is None else format_duration(minutes * 60).replace(" 00초", "")
         if not p.block_everything:
             what = "아무 앱도 막지 않습니다"
+        elif p.bans():
+            n = len(p.normalized_apps())
+            what = f"고른 앱 {n}개만 막습니다" if n else "⚠ 고른 앱이 없어 아무 앱도 막지 않습니다"
         else:
             n = len(p.normalized_apps())
             what = f"고른 앱 {n}개만 쓸 수 있습니다" if n else "⚠ 고른 앱이 없어 거의 모든 앱이 최소화됩니다"
@@ -823,7 +843,16 @@ class MainWindow(QMainWindow):
 
     def _confirm_start(self, p: Profile, minutes: Optional[int]) -> bool:
         when = "직접 끝낼 때까지" if minutes is None else f"{minutes}분 동안"
-        if p.block_everything:
+        if p.bans():
+            names = [self.settings.app_display_name(a) for a in p.normalized_apps()]
+            apps = ", ".join(names[:6]) + (f" 외 {len(names) - 6}개" if len(names) > 6 else "")
+            body = (
+                f"<b>{p.name}</b> 모드로 {when} 집중합니다.<br><br>"
+                f"막을 앱: {apps or '(없음)'}<br>"
+                "이 앱들은 앞에 나오면 바로 최소화되고, 그 밖의 앱은 그대로 쓸 수 있습니다.<br><br>"
+                f"중간에 끝내려면 <b>{self.settings.unlock_code_length}글자 랜덤 문자열</b>을 직접 입력해야 합니다."
+            )
+        elif p.block_everything:
             names = [self.settings.app_display_name(a) for a in p.normalized_apps()]
             apps = ", ".join(names[:6]) + (f" 외 {len(names) - 6}개" if len(names) > 6 else "")
             body = (
@@ -992,14 +1021,8 @@ class MainWindow(QMainWindow):
             "모드 변경…", "집중을 끝내지 않고 다른 모드로 바꿉니다 (목록에서 아래쪽 모드로 바꿀 때만 짧은 해제 문자열 필요)", self.change_mode_requested
         )
         self.run_menu.addSeparator()
-        self.edit_apps_btn = item(
-            "허용 앱 편집…", "짧은 해제 문자열을 입력하면 집중을 끝내지 않고 허용 앱 목록을 고칠 수 있습니다",
-            self.edit_apps_requested,
-        )
-        self.remove_apps_btn = item(
-            "앱·사이트 빼기…", "해제 문자열 없이 허용 앱·사이트를 목록에서 뺄 수 있습니다 (추가는 안 됨)",
-            self.remove_apps_requested,
-        )
+        self.edit_apps_btn = item("허용 앱 편집…", EDIT_APPS_TIP, self.edit_apps_requested)
+        self.remove_apps_btn = item("앱·사이트 빼기…", REMOVE_APPS_TIP, self.remove_apps_requested)
         self.run_menu_btn = QPushButton("⚙")
         self.run_menu_btn.setObjectName("runMenuButton")
         self.run_menu_btn.setToolTip("시간 추가 · 모드 변경 · 허용 앱·사이트 편집")
@@ -1030,7 +1053,17 @@ class MainWindow(QMainWindow):
         self._show_page(self.running_page)
         self.run_mode.setText(profile.name)
         self.run_apps.clear()
-        if profile.block_everything:
+        if profile.bans():
+            apps = profile.normalized_apps()
+            self.run_apps_title.setText(f"지금 막는 앱 ({len(apps)}개)")
+            for exe in apps:
+                name = self.settings.app_display_name(exe)
+                item = QListWidgetItem(app_catalog.app_icon(self._app_path(exe), name), name)
+                item.setToolTip(f"{name}은(는) 앞에 나오면 최소화됩니다")  # 막는 앱이라 눌러도 열지 않음
+                self.run_apps.addItem(item)
+            if not apps:
+                self.run_apps.addItem("(없음 — 아무 앱도 막지 않습니다)")
+        elif profile.block_everything:
             apps = profile.normalized_apps()
             self.run_apps_title.setText(f"지금 쓸 수 있는 앱 ({len(apps)}개)")
             for exe in apps:
@@ -1050,7 +1083,16 @@ class MainWindow(QMainWindow):
         self.add_time_btn.setVisible(session.ends_at is not None)  # '끝낼 때까지'는 늘릴 시간이 없음
         self.change_mode_btn.setVisible(len(self.settings.profiles) > 1)
         self.run_menu_btn.setVisible(any(a.isVisible() for a in self.run_menu.actions() if not a.isSeparator()))
-        self.edit_apps_btn.setText("허용 앱·사이트 편집…" if profile.limits_sites() else "허용 앱 편집…")
+        if profile.bans():
+            self.edit_apps_btn.setText("막을 앱 편집…")
+            self.edit_apps_btn.setToolTip("짧은 해제 문자열을 입력하면 집중을 끝내지 않고 막을 앱 목록을 고칠 수 있습니다")
+            self.remove_apps_btn.setText("막을 앱 더하기…")
+            self.remove_apps_btn.setToolTip("해제 문자열 없이 막을 앱을 더할 수 있습니다 (빼기는 안 됨)")
+        else:
+            self.edit_apps_btn.setText("허용 앱·사이트 편집…" if profile.limits_sites() else "허용 앱 편집…")
+            self.edit_apps_btn.setToolTip(EDIT_APPS_TIP)
+            self.remove_apps_btn.setText("앱·사이트 빼기…")
+            self.remove_apps_btn.setToolTip(REMOVE_APPS_TIP)
         self.end_hint.setText(
             f"끝내려면 {self.settings.unlock_code_length}글자 랜덤 문자열을 직접 입력해야 합니다."
         )

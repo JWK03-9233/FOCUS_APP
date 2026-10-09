@@ -92,3 +92,43 @@ def test_add_profile_inherits_from_base():
     assert s.add_profile("빈 모드").allowed_apps == []
     with pytest.raises(ValueError):
         s.add_profile("없는 데서", base="없는 모드")
+
+
+# ---------------------------------------------------------------- Ban 모드 (고른 앱만 막기)
+KEEP_ID = "eilembjdkfgodjkcjnpgpaenohkicgjd"
+
+
+def test_ban_profile_blocks_only_listed_apps():
+    p = Profile("ban", allowed_apps=["KakaoTalk.exe", f"chrome.exe|{KEEP_ID}"], ban_apps=True)
+    assert p.bans()
+    assert not p.allows("kakaotalk.exe") and not p.allows_window("KAKAOTALK.EXE")
+    assert p.allows("code.exe") and p.allows_window("code.exe")
+    # 웹 앱을 막아도 브라우저 자체는 그대로 쓸 수 있음
+    assert p.allows_window("chrome.exe", "Chrome.Default")
+    assert not p.allows_window("chrome.exe", f"Chrome._crx_{KEEP_ID}")
+    assert p.allows_window("msedge.exe", f"Edge._crx_{KEEP_ID}")  # 다른 브라우저의 같은 ID는 다른 앱
+
+
+def test_ban_profile_never_limits_sites():
+    p = Profile("ban", ban_apps=True, restrict_sites=True, allowed_sites=["notion.so"])
+    assert not p.limits_sites() and not p.browses_sites()
+    assert p.allows_window("chrome.exe")
+
+
+def test_ban_flag_ignored_when_not_blocking():
+    p = Profile("free", allowed_apps=["kakaotalk.exe"], block_everything=False, ban_apps=True)
+    assert not p.bans() and p.allows("kakaotalk.exe")
+
+
+def test_ban_mode_saved_and_inherited(tmp_path):
+    s = Settings()
+    s.add_profile("밴")
+    s.get_profile("밴").ban_apps = True
+    s.get_profile("밴").add_app("kakaotalk.exe")
+    path = tmp_path / "settings.json"
+    s.save(path)
+    loaded = Settings.load(path)
+    assert loaded.get_profile("밴").bans()
+    assert not loaded.get_profile("공부용").bans()
+    copy = loaded.add_profile("밴2", base="밴")
+    assert copy.bans() and copy.normalized_apps() == ["kakaotalk.exe"]

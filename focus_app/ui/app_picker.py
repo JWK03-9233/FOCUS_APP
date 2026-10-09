@@ -159,9 +159,11 @@ class AppPickerDialog(QDialog):
         on_hidden_changed: Optional[Callable[[List[str]], None]] = None,
         app_names: Optional[Callable[[str], str]] = None,
         app_paths: Optional[Callable[[str], str]] = None,
+        ban: bool = False,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("허용할 앱 고르기")
+        self.ban = ban  # Ban 모드: 고른 앱을 막을 앱으로 씀 (안내 문구만 다름)
+        self.setWindowTitle("막을 앱 고르기" if ban else "허용할 앱 고르기")
         self.resize(560, 660)
         self._already = {normalize_exe(a) for a in already_allowed}
         self._entries: Dict[str, AppEntry] = {}
@@ -180,10 +182,13 @@ class AppPickerDialog(QDialog):
 
         layout = scroll_layout(self)  # 내용이 많으면 창 전체를 스크롤
         layout.setSpacing(10)
-        title = QLabel(f"<b>{mode_name}</b> 모드에서 쓸 앱을 체크하세요.")
+        title = QLabel(f"<b>{mode_name}</b> 모드에서 {'막을' if ban else '쓸'} 앱을 체크하세요.")
         title.setObjectName("sectionTitle")
         layout.addWidget(title)
-        sub = QLabel("체크한 앱만 집중 중에 쓸 수 있고, 나머지 앱은 앞으로 나오면 자동으로 최소화됩니다.")
+        sub = QLabel(
+            "체크한 앱은 집중 중에 앞으로 나오면 자동으로 최소화되고, 나머지 앱은 그대로 쓸 수 있습니다." if ban
+            else "체크한 앱만 집중 중에 쓸 수 있고, 나머지 앱은 앞으로 나오면 자동으로 최소화됩니다."
+        )
         sub.setObjectName("muted")
         sub.setWordWrap(True)
         layout.addWidget(sub)
@@ -442,7 +447,10 @@ class AppPickerDialog(QDialog):
     def add_custom(self, path: str) -> None:
         exe = normalize_exe(path)
         if exe in SYSTEM_EXES:
-            QMessageBox.information(self, "허용 앱", f"{exe}은(는) 시스템 요소라 항상 쓸 수 있습니다. 추가하지 않아도 됩니다.")
+            if self.ban:
+                QMessageBox.information(self, "막을 앱", f"{exe}은(는) 시스템 요소라 막을 수 없습니다.")
+            else:
+                QMessageBox.information(self, "허용 앱", f"{exe}은(는) 시스템 요소라 항상 쓸 수 있습니다. 추가하지 않아도 됩니다.")
             return
         if exe in self._hidden:  # 직접 고른 앱은 숨김에서 꺼냄
             self._hidden = [h for h in self._hidden if h != exe]

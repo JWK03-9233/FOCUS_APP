@@ -149,11 +149,11 @@ class FocusApp:
         m.addAction(self.quit_action)
 
     def _allowed_now(self) -> list:
-        """집중 중에 쓸 수 있는 허용 앱 (실행 파일 이름). 앱을 막지 않는 모드거나 대기 중이면 빈 목록."""
+        """집중 중에 쓸 수 있는 허용 앱 (실행 파일 이름). 앱을 막지 않는 모드·Ban 모드거나 대기 중이면 빈 목록."""
         if self.session is None:
             return []
         profile = self.settings.get_profile(self.session.profile)
-        if profile is None or not profile.block_everything:
+        if profile is None or not profile.block_everything or profile.bans():
             return []
         return profile.normalized_apps()
 
@@ -477,7 +477,10 @@ class FocusApp:
         self._edit_allowed(remove_only=False)
 
     def remove_apps_during_focus(self) -> None:
-        """해제 문자열 없이 지금 모드의 허용 앱·사이트를 빼기만 합니다 (더 엄격해질 뿐이라 확인 없음)."""
+        """해제 문자열 없이 지금 모드를 더 엄격하게만 고칩니다 (확인 없음).
+
+        보통 모드는 허용 앱·사이트를 빼기만, Ban 모드는 막을 앱을 더하기만 할 수 있습니다.
+        """
         if not self.active or self._dialog_open:
             return
         self._edit_allowed(remove_only=True)
@@ -505,7 +508,9 @@ class FocusApp:
             self._dialog_open = False
         self._safe_save_settings()
         self._apply_session_profile(session, profile)
-        log.info("집중 중 허용 앱 %s: %s -> %s, 사이트 %s", "빼기" if remove_only else "변경", profile.name, profile.normalized_apps(),
+        action = "변경" if not remove_only else ("더하기" if profile.bans() else "빼기")
+        log.info("집중 중 %s 앱 %s: %s -> %s, 사이트 %s", "막을" if profile.bans() else "허용", action, profile.name,
+                 profile.normalized_apps(),
                  profile.normalized_sites() if profile.limits_sites() else "제한 없음")
 
     def _apply_session_profile(self, session: FocusSession, profile: Profile) -> None:

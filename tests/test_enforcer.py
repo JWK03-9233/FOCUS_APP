@@ -46,3 +46,10 @@ def test_is_user_app_excludes_system_and_self():
     assert not is_user_app(fw("explorer.exe"), OWN)
     assert not is_user_app(fw("code.exe", pid=OWN), OWN)
     assert not is_user_app(fw(""), OWN)
+
+
+def test_ban_mode_blocks_only_listed():
+    ban = Profile("ban", allowed_apps=["kakaotalk.exe"], ban_apps=True)
+    assert decide(fw("KakaoTalk.exe"), ban, OWN) is Decision.BLOCK
+    assert decide(fw("chrome.exe"), ban, OWN) is Decision.ALLOW
+    assert decide(fw("explorer.exe"), ban, OWN) is Decision.ALLOW

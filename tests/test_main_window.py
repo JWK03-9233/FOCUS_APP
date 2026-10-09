@@ -1119,3 +1119,84 @@ def test_new_mode_dialog_inherits_apps(qapp, monkeypatch):
     w._add_mode()
     assert s.get_profile("글쓰기").allowed_apps == []
     assert picked == [1]  # 빈 모드는 바로 앱을 고르게 함
+
+
+def test_ban_mode_radio_and_texts(qapp):
+    s, w = make_window(qapp)
+    w.ban_radio.setChecked(True)
+    p = w.current_mode()
+    assert p.bans() and p.block_everything
+    assert w.apps_title.text().startswith("② 막을 앱")
+    assert not w.sites_title.isVisibleTo(w) and w.add_app_btn.isEnabled()
+    assert "막습니다" in w.start_summary.text()
+    w.block_radio.setChecked(True)
+    assert not p.bans() and p.block_everything
+    w.ban_radio.setChecked(True)
+    w.free_radio.setChecked(True)
+    assert not p.block_everything and not p.ban_apps
+
+
+def test_new_mode_dialog_ban_kind(qapp, monkeypatch):
+    from focus_app.ui.new_mode_dialog import KIND_BAN, KIND_FREE, NewModeDialog
+
+    s, w = make_window(qapp)
+    picked = []
+    monkeypatch.setattr(w, "_add_apps", lambda: picked.append(1))
+
+    def fake_exec(self):
+        self.name_edit.setText("밴")
+        self.kind_combo.setCurrentIndex(self.kind_combo.findData(KIND_BAN))
+        return 1
+
+    monkeypatch.setattr(NewModeDialog, "exec", fake_exec)
+    w._add_mode()
+    assert s.get_profile("밴").bans() and picked == [1]
+
+    def fake_exec_free(self):
+        self.name_edit.setText("쉬기")
+        self.kind_combo.setCurrentIndex(self.kind_combo.findData(KIND_FREE))
+        return 1
+
+    monkeypatch.setattr(NewModeDialog, "exec", fake_exec_free)
+    w._add_mode()
+    assert not s.get_profile("쉬기").block_everything and picked == [1]  # 막지 않는 모드는 앱을 고르지 않음
+
+    def fake_exec_inherit(self):
+        self.name_edit.setText("밴2")
+        self.base_combo.setCurrentIndex(self.base_combo.findData("밴"))
+        assert not self.kind_combo.isEnabled()  # 이어받으면 종류도 이어받음
+        return 1
+
+    monkeypatch.setattr(NewModeDialog, "exec", fake_exec_inherit)
+    w._add_mode()
+    assert s.get_profile("밴2").bans()
+
+
+def test_controller_ban_mode_session(qapp, monkeypatch):
+    from focus_app import app as app_mod
+    from focus_app.ui import allowed_apps_dialog
+
+    ctl = app_mod.FocusApp(qapp, show_window=False)
+    try:
+        p = ctl.settings.current_profile()
+        p.ban_apps, p.allowed_apps = True, ["kakaotalk.exe"]
+        ctl.start_focus(p.name, 30)
+        assert not ctl.monitor.profile.allows("kakaotalk.exe") and ctl.monitor.profile.allows("code.exe")
+        assert ctl._allowed_now() == []  # 트레이의 '지금 쓸 수 있는 앱'은 보여 주지 않음
+        assert ctl.window.run_apps_title.text().startswith("지금 막는 앱")
+        assert ctl.window.remove_apps_btn.text() == "막을 앱 더하기…"
+        monkeypatch.setattr(ctl, "_confirm", lambda *a, **k: pytest.fail("막을 앱 더하기에는 해제 문자열이 필요 없음"))
+
+        def fake_exec(self):
+            assert self.remove_only and self.can_add and not self.can_remove
+            self.remove_app("kakaotalk.exe")  # 무시됨
+            self.add_entries([AppEntry("discord.exe", "Discord", "")])
+            return 1
+
+        monkeypatch.setattr(allowed_apps_dialog.AllowedAppsDialog, "exec", fake_exec)
+        ctl.remove_apps_during_focus()
+        assert ctl.settings.get_profile(p.name).normalized_apps() == ["kakaotalk.exe", "discord.exe"]
+        assert not ctl.monitor.profile.allows("discord.exe") and ctl.active
+    finally:
+        ctl._end_session("manual")
+        _close(ctl)
