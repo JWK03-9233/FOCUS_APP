@@ -11,6 +11,10 @@ Qt에 의존하지 않습니다. 네트워크·파일 작업은 오래 걸릴 �
 * zip(``FocusApp-v<버전>-win64.zip``)만 있으면 (예전 릴리스):
   압축을 풀어 파일을 설치 폴더에 덮어쓰고 다시 실행합니다.
 
+ARM64 기기에서는 ARM64판(``FocusApp_Setup_ARM64_<버전>.exe``, ``FocusApp-v<버전>-arm64.zip``)을 먼저 고르고,
+릴리스에 없으면 x64판을 씁니다 (Windows 11 ARM은 x64를 에뮬레이션으로 실행). x64 파일 이름은 그대로라
+ARM64를 모르는 예전 버전도 계속 x64판으로 업데이트됩니다.
+
 설정과 세션은 %APPDATA%에 있으므로 업데이트해도 그대로 유지됩니다.
 
 릴리스 설명에 ``<!-- focusapp-urgency: critical -->`` 같은 표시가 있으면 업데이트 중요도로
@@ -24,6 +28,7 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -42,6 +47,9 @@ log = logging.getLogger(__name__)
 
 ASSET_SUFFIX = "-win64.zip"
 INSTALLER_RE = re.compile(r"^FocusApp_Setup_[\d.]+\.exe$", re.IGNORECASE)
+ARM64_ASSET_SUFFIX = "-arm64.zip"
+ARM64_INSTALLER_RE = re.compile(r"^FocusApp_Setup_ARM64_[\d.]+\.exe$", re.IGNORECASE)
+IMAGE_FILE_MACHINE_ARM64 = 0xAA64
 URGENCY_RE = re.compile(r"<!--\s*focusapp-urgency:\s*(optional|recommended|critical)\s*-->", re.IGNORECASE)
 URGENCIES = ("optional", "recommended", "critical")
 EXE_NAME = f"{APP_NAME}.exe"
@@ -129,16 +137,56 @@ def fetch_latest(token: str = "", timeout: float = 10.0) -> ReleaseInfo:
     return release_from_json(data)
 
 
-def release_from_json(data: dict) -> ReleaseInfo:
+def machine_arch() -> str:
+    """기기의 실제 아키텍처: "arm64" 또는 "x64".
+
+    x64판이 ARM64 기기에서 에뮬레이션으로 돌면 platform.machine()이 AMD64를 돌려주므로,
+    Windows에서는 IsWow64Process2로 기기(native) 아키텍처를 묻습니다.
+    """
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            fn = kernel32.IsWow64Process2  # Windows 10 1709+
+            fn.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.USHORT), ctypes.POINTER(wintypes.USHORT)]
+            fn.restype = wintypes.BOOL
+            process, native = wintypes.USHORT(), wintypes.USHORT()
+            if fn(kernel32.GetCurrentProcess(), ctypes.byref(process), ctypes.byref(native)):
+                return "arm64" if native.value == IMAGE_FILE_MACHINE_ARM64 else "x64"
+        except (AttributeError, OSError):
+            pass
+    return "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
+
+
+def _pick_asset(assets: list, arch: str) -> Tuple[Optional[dict], str]:
+    """(asset, kind). 기기에 맞는 설치 프로그램 > 같은 아키텍처 zip 순. ARM64판이 없으면 x64판."""
+    def find(match):
+        return next((a for a in assets if match(str(a.get("name", "")))), None)
+
+    candidates = []
+    if arch == "arm64":
+        candidates += [
+            (lambda n: bool(ARM64_INSTALLER_RE.match(n)), "installer"),
+            (lambda n: n.lower().endswith(ARM64_ASSET_SUFFIX), "zip"),
+        ]
+    candidates += [
+        (lambda n: bool(INSTALLER_RE.match(n)), "installer"),
+        (lambda n: n.lower().endswith(ASSET_SUFFIX), "zip"),  # 예전 릴리스
+    ]
+    for match, kind in candidates:
+        asset = find(match)
+        if asset is not None:
+            return asset, kind
+    return None, "zip"
+
+
+def release_from_json(data: dict, arch: Optional[str] = None) -> ReleaseInfo:
     tag = str(data.get("tag_name") or "")
     version = tag[1:] if tag[:1] in ("v", "V") else tag
     assets = data.get("assets") or []
-    # 설치 프로그램이 있으면 그것을, 없으면 (예전 릴리스) zip을 씀
-    asset = next((a for a in assets if INSTALLER_RE.match(str(a.get("name", "")))), None)
-    kind = "installer"
-    if asset is None:
-        asset = next((a for a in assets if str(a.get("name", "")).lower().endswith(ASSET_SUFFIX)), None)
-        kind = "zip"
+    asset, kind = _pick_asset(assets, arch or machine_arch())
     body = str(data.get("body") or "")
     m = URGENCY_RE.search(body)
     urgency = m.group(1).lower() if m else "optional"
@@ -155,7 +203,7 @@ def release_from_json(data: dict) -> ReleaseInfo:
         asset_url=str(asset.get("url", "")) if asset else "",
         asset_size=int(asset.get("size") or 0) if asset else 0,
         sha256=sha,
-        kind=kind if asset else "zip",
+        kind=kind,
         urgency=urgency,
     )
 

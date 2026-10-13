@@ -1,4 +1,5 @@
 # push·PR마다 테스트만 돌립니다. 빌드와 릴리스는 로컬에서 `python release.py <버전>`으로 합니다.
+# (ARM64판은 release.py가 build-arm64.yml을 실행해 빌드합니다.)
 name: CI
 
 on:

@@ -2,6 +2,9 @@
 ;
 ; 보통은 scripts\release.py가 버전과 출력 폴더를 넘겨 컴파일합니다:
 ;   ISCC.exe /DMyAppVersion=0.4.0 /DMyOutputDir=..\installer_output installer\FocusApp.iss
+; ARM64판(ARM64 Python으로 빌드한 dist\FocusApp)은 /DMyArch=arm64를 더 넘깁니다.
+; 결과 파일 이름은 FocusApp_Setup_ARM64_<버전>.exe이고 ARM64 Windows에만 설치됩니다.
+; AppId가 같으므로 x64판 위에 ARM64판을 설치하면 (또는 그 반대) 같은 앱으로 교체됩니다.
 ;
 ; 앱 안의 업데이트는 이 설치 파일을 다음처럼 조용히 실행합니다:
 ;   FocusApp_Setup_<버전>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="<현재 설치 폴더>" /RESTARTAPP=1
@@ -11,6 +14,9 @@
 
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
+#endif
+#ifndef MyArch
+  #define MyArch "x64"
 #endif
 #ifndef MyOutputDir
   #define MyOutputDir "..\installer_output"
@@ -40,15 +46,24 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 UsePreviousAppDir=yes
 OutputDir={#MyOutputDir}
+#if MyArch == "arm64"
+OutputBaseFilename=FocusApp_Setup_ARM64_{#MyAppVersion}
+#else
 OutputBaseFilename=FocusApp_Setup_{#MyAppVersion}
+#endif
 SetupIconFile=..\focus_app\assets\focus_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+#if MyArch == "arm64"
+ArchitecturesAllowed=arm64
+ArchitecturesInstallIn64BitMode=arm64
+#else
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+#endif
 ; 실행 중인 FocusApp을 닫고 설치 (Restart Manager)
 CloseApplications=force
 RestartApplications=no

@@ -1,0 +1,69 @@
+# ARM64판 빌드. 보통은 로컬 `python release.py <버전>`이 x64판을 draft로 올린 뒤 이 워크플로를 실행하고,
+# 끝날 때까지 기다렸다가 릴리스를 공개합니다. ARM64판은 ARM64용 Python으로만 빌드할 수 있어서
+# windows-11-arm 러너를 씁니다. 받은 커밋에서 release.py --arm64-build가 버전 bump -> 테스트 -> PyInstaller
+# -> 비밀 검사 -> zip -> Inno Setup(arm64)을 거쳐 같은 릴리스(draft)에 파일을 올립니다. 공개는 하지 않습니다.
+#
+# 손으로 실행할 때 (draft v0.4.0이 이미 있어야 함):
+#   gh workflow run build-arm64.yml -f version=0.4.0 -f commit=<커밋 SHA>
+name: ARM64 빌드
+run-name: ARM64 v${{ inputs.version }} (${{ inputs.request_id }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "릴리스 버전 (예: 0.4.0) - v<버전> 릴리스(draft)가 이미 있어야 함"
+        required: true
+      commit:
+        description: "빌드할 커밋 SHA (x64판을 빌드한 커밋)"
+        required: true
+      request_id:
+        description: "release.py가 이 실행을 찾을 때 쓰는 값"
+        required: false
+        default: manual
+
+permissions:
+  contents: write # 릴리스에 파일 올리기
+
+jobs:
+  build-arm64:
+    runs-on: windows-11-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          architecture: arm64
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - run: python -m pip install -r requirements-dev.txt
+
+      - name: Inno Setup / gh 준비
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            if (Get-Command choco -ErrorAction SilentlyContinue) {
+              choco install innosetup -y --no-progress
+            } else {
+              Invoke-WebRequest -Uri "https://jrsoftware.org/download.php/is.exe" -OutFile "$env:RUNNER_TEMP\is.exe"
+              Start-Process -FilePath "$env:RUNNER_TEMP\is.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-" -Wait
+            }
+          }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup 설치 실패" }
+          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { choco install gh -y --no-progress }
+
+      - name: ARM64 빌드 + 릴리스에 올리기
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QT_QPA_PLATFORM: offscreen
+          VERSION: ${{ inputs.version }}
+        run: |
+          if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { $env:Path += ";$env:ProgramFiles\GitHub CLI" }
+          python release.py "$env:VERSION" --arm64-build --yes

@@ -4,7 +4,8 @@ FocusApp 릴리스 자동화 스크립트
 릴리스 순서:
 
     preflight -> test -> bump -> build -> secrets scan -> zip -> installer
-              -> publish (draft 생성 + 업로드 -> 체크섬 확인 -> 공개)
+              -> publish (draft 생성 + 업로드 -> 체크섬 확인
+                          -> ARM64판 빌드 (GitHub Actions) -> 공개)
               -> verify (공개 다운로드 주소 확인)
 
 앱 안의 업데이트는 GitHub Releases의 "최신 릴리스"를 읽습니다. 그래서 릴리스를 먼저
@@ -15,6 +16,17 @@ draft(비공개 초안)로 만들어 파일을 올리고, 올라간 파일의 �
 커밋·push는 직접 하세요. 마지막 요약에 정확한 명령을 보여 줍니다.
 
 릴리스 설명은 CHANGELOG.md의 해당 버전 절을 씁니다 (없으면 비워 둠).
+
+ARM64판:
+    ARM64판은 ARM64용 Python으로만 빌드할 수 있어 x64 PC에서는 만들 수 없습니다. 그래서 x64판을
+    draft로 올린 뒤 GitHub Actions(.github/workflows/build-arm64.yml, windows-11-arm 러너)를 실행해
+    ARM64판을 빌드하고 같은 draft에 올리게 합니다. 끝날 때까지 기다렸다가 두 판이 모두 올라간 것을
+    확인한 뒤에야 공개합니다. ARM64 빌드가 실패하면 draft로 남습니다.
+    러너는 지금 로컬 HEAD 커밋을 받아 빌드하므로, 커밋하지 않은 코드 변경이 있거나 HEAD를 push하지
+    않았으면 preflight에서 멈춥니다 (버전 파일은 러너가 똑같이 bump하므로 괜찮음).
+    x64 파일 이름은 그대로이고 ARM64에만 _ARM64_ / -arm64 꼬리표가 붙습니다:
+        FocusApp_Setup_<버전>.exe        FocusApp-v<버전>-win64.zip    (x64)
+        FocusApp_Setup_ARM64_<버전>.exe  FocusApp-v<버전>-arm64.zip    (ARM64)
 
 사용법:
     python release.py                        # 상태 + 다음 버전 제안
@@ -33,6 +45,9 @@ draft(비공개 초안)로 만들어 파일을 올리고, 올라간 파일의 �
     --urgency U      optional | recommended | critical   (기본: optional)
                      recommended: 앱이 알림으로 알려 줌
                      critical:    앱이 실행되자마자 업데이트 창을 띄움
+    --no-arm64       ARM64판 없이 x64판만 릴리스
+    --arm64-build    (GitHub Actions용) ARM64 Python으로 ARM64판을 빌드해 이미 있는 릴리스(draft)에
+                     올리기만 함. 공개·체크섬 파일은 x64 쪽 release.py가 맡음
 
 준비물:
     * `gh auth login` ('repo' 권한)  -> 릴리스 생성 + 파일 업로드
@@ -43,12 +58,15 @@ draft(비공개 초안)로 만들어 파일을 올리고, 올라간 파일의 �
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
+import uuid
 import webbrowser
 from datetime import datetime
 
@@ -73,6 +91,9 @@ GITHUB_REPO = "JWK03-9233/FOCUS_APP"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases/new"
 INSTALLER_NAME = "FocusApp_Setup_{version}.exe"
 ZIP_NAME = "FocusApp-v{version}-win64.zip"
+ARM64_INSTALLER_NAME = "FocusApp_Setup_ARM64_{version}.exe"  # 앱의 updater.py가 이 이름을 찾음
+ARM64_ZIP_NAME = "FocusApp-v{version}-arm64.zip"
+ARM64_WORKFLOW = "build-arm64.yml"
 SUMS_NAME = "SHA256SUMS.txt"
 DOWNLOAD_URL_TEMPLATE = "https://github.com/" + GITHUB_REPO + "/releases/download/v{version}/{name}"
 
@@ -87,7 +108,18 @@ INNO_SETUP_PATHS = [
     os.path.expandvars(r"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe"),
 ]
 
+# 이 Python이 만드는 빌드의 아키텍처. ARM64 PC의 x64 Python은 AMD64라서 x64판을 만듦
+HOST_ARCH = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
+
 DRY_RUN = False
+
+
+def installer_name(version, arch):
+    return (ARM64_INSTALLER_NAME if arch == "arm64" else INSTALLER_NAME).format(version=version)
+
+
+def zip_name(version, arch):
+    return (ARM64_ZIP_NAME if arch == "arm64" else ZIP_NAME).format(version=version)
 
 
 def say(msg=""):
@@ -373,9 +405,9 @@ def check_build_secrets():
     return True
 
 
-def create_zip(version):
+def create_zip(version, arch):
     source_dir = os.path.join(ROOT, DIST_DIR, BUILD_NAME)
-    zip_path = os.path.join(ROOT, DIST_DIR, ZIP_NAME.format(version=version))
+    zip_path = os.path.join(ROOT, DIST_DIR, zip_name(version, arch))
     if DRY_RUN:
         dry(f"{rel(source_dir)} -> {rel(zip_path)}")
         return zip_path
@@ -393,15 +425,15 @@ def create_zip(version):
         return None
 
 
-def build_installer(version):
-    step("PACKAGE - Inno Setup")
+def build_installer(version, arch):
+    step(f"PACKAGE - Inno Setup ({arch})")
     iscc = find_inno_setup()
     if not iscc:
         say("XX  Inno Setup을 찾지 못했습니다.")
         return None
     out_dir = os.path.join(ROOT, INSTALLER_OUTPUT_DIR)
-    installer_path = os.path.join(out_dir, INSTALLER_NAME.format(version=version))
-    cmd = [iscc, f"/DMyAppVersion={version}", f"/DMyOutputDir={out_dir}", ISS_FILE]
+    installer_path = os.path.join(out_dir, installer_name(version, arch))
+    cmd = [iscc, f"/DMyAppVersion={version}", f"/DMyArch={arch}", f"/DMyOutputDir={out_dir}", ISS_FILE]
     if DRY_RUN:
         dry(" ".join(cmd))
         return installer_path
@@ -419,7 +451,8 @@ def build_installer(version):
     return installer_path
 
 
-def write_checksums(version, assets):
+def write_checksums(version, assets, remote=()):
+    """assets: 로컬 파일 경로. remote: 로컬에 없는 (이름, sha256) - GitHub Actions가 올린 ARM64 파일."""
     path = os.path.join(ROOT, INSTALLER_OUTPUT_DIR, SUMS_NAME)
     if DRY_RUN:
         dry(f"{rel(path)}에 SHA-256 기록")
@@ -428,6 +461,8 @@ def write_checksums(version, assets):
     with open(path, "w", encoding="ascii", newline="\n") as f:
         for a in assets:
             f.write(f"{sha256_of(a)}  {os.path.basename(a)}\n")
+        for name, sha in remote:
+            f.write(f"{sha}  {name}\n")
     say(f"OK  체크섬: {rel(path)}")
     return path
 
@@ -442,8 +477,8 @@ def release_notes(version, urgency):
     return (notes + "\n\n" + marker).strip()
 
 
-def publish_release(version, assets, urgency):
-    """draft로 만들어 올린 뒤 체크섬을 확인하고 나서 공개합니다."""
+def publish_release(version, assets, urgency, with_arm64=False, state=None):
+    """draft로 만들어 올린 뒤 체크섬을 확인하고 (with_arm64면 ARM64판까지 받은 뒤) 공개합니다."""
     step("PUBLISH - GitHub Release")
     gh = find_gh()
     if not gh:
@@ -487,7 +522,18 @@ def publish_release(version, assets, urgency):
         say("XX  올라간 파일이 로컬과 다릅니다 - draft로 남겨 둡니다 (사용자에게 보이지 않음).")
         return False
 
-    # 3) 공개 + 최신으로 지정 (이때부터 앱이 새 버전을 봄)
+    # 3) ARM64판: GitHub Actions가 빌드해 같은 draft에 올림 -> 체크섬 파일에 함께 기록
+    if with_arm64:
+        ok = build_arm64_on_github(version) and update_checksums_with_remote(version, assets)
+        if state is not None:
+            state["arm64"] = ok
+        if not ok:
+            say("XX  ARM64판이 준비되지 않아 draft로 남겨 둡니다 (사용자에게 보이지 않음). 이어서 하려면:")
+            say(f"    python release.py {version} --publish-only              # ARM64 다시 시도")
+            say(f"    python release.py {version} --publish-only --no-arm64   # x64판만 공개")
+            return False
+
+    # 4) 공개 + 최신으로 지정 (이때부터 앱이 새 버전을 봄)
     if not exists or is_draft:
         r = run([gh, "release", "edit", tag, "--repo", GITHUB_REPO, "--draft=false", "--latest"], cwd=ROOT)
         if not DRY_RUN and r.returncode != 0:
@@ -497,16 +543,23 @@ def publish_release(version, assets, urgency):
     return True
 
 
+def remote_assets(version):
+    """릴리스(draft 포함)에 올라간 파일: {이름: (digest, 크기)}. 읽지 못하면 None."""
+    r = subprocess.run([find_gh(), "release", "view", f"v{version}", "--repo", GITHUB_REPO, "--json", "assets"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        return None
+    return {a["name"]: (a.get("digest") or "", a.get("size")) for a in json.loads(r.stdout).get("assets", [])}
+
+
 def verify_uploaded_assets(version, assets):
     if DRY_RUN:
         dry("올라간 파일의 sha256 digest를 로컬 파일과 비교")
         return True
-    r = subprocess.run([find_gh(), "release", "view", f"v{version}", "--repo", GITHUB_REPO, "--json", "assets"],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if r.returncode != 0:
+    remote = remote_assets(version)
+    if remote is None:
         say("XX  릴리스 정보를 읽지 못했습니다")
         return False
-    remote = {a["name"]: (a.get("digest") or "", a.get("size")) for a in json.loads(r.stdout).get("assets", [])}
     ok = True
     for a in assets:
         name = os.path.basename(a)
@@ -526,21 +579,168 @@ def verify_uploaded_assets(version, assets):
     return ok
 
 
-def verify_download(version):
+def verify_download(version, archs):
     """앱이 받을 설치 프로그램 주소가 실제로 열리는지 확인합니다."""
-    url = DOWNLOAD_URL_TEMPLATE.format(version=version, name=INSTALLER_NAME.format(version=version))
-    if DRY_RUN:
-        dry(f"{url} 확인")
-        return True
-    try:
-        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "FocusApp-Release"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            ok = 200 <= resp.status < 400
-    except Exception as e:
-        say(f"XX  다운로드 주소에 접속하지 못했습니다: {e}")
-        return False
-    say(f"{'OK ' if ok else 'XX '} 다운로드 주소 확인: {url}")
+    ok = True
+    for arch in archs:
+        url = DOWNLOAD_URL_TEMPLATE.format(version=version, name=installer_name(version, arch))
+        if DRY_RUN:
+            dry(f"{url} 확인")
+            continue
+        try:
+            req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "FocusApp-Release"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                good = 200 <= resp.status < 400
+        except Exception as e:
+            say(f"XX  다운로드 주소에 접속하지 못했습니다: {url} ({e})")
+            ok = False
+            continue
+        say(f"{'OK ' if good else 'XX '} 다운로드 주소 확인: {url}")
+        ok &= good
     return ok
+
+
+# ---------------------------------------------------------------- ARM64 (GitHub Actions)
+
+def arm64_asset_names(version):
+    return [installer_name(version, "arm64"), zip_name(version, "arm64")]
+
+
+def head_commit():
+    r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def uncommitted_code_changes():
+    """커밋하지 않은 추적 파일 변경 (버전 파일은 러너가 똑같이 bump하므로 제외). git이 없으면 None."""
+    r = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        return None
+    versioned = {f.replace(os.sep, "/") for f in VERSIONED_FILES}
+    changed = [line[3:].strip().strip('"') for line in r.stdout.splitlines() if line.strip()]
+    return [f for f in changed if f not in versioned]
+
+
+def arm64_preflight(errors, warnings):
+    """ARM64 빌드를 GitHub Actions에 맡길 수 있는지: 워크플로가 있고, 러너가 받을 커밋이 GitHub에 있는지."""
+    gh = find_gh()
+    if not gh:
+        return
+    r = subprocess.run([gh, "workflow", "view", ARM64_WORKFLOW, "--repo", GITHUB_REPO],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        errors.append(f"GitHub 기본 브랜치에 .github/workflows/{ARM64_WORKFLOW}가 없습니다 - "
+                      "먼저 push하거나 --no-arm64로 x64판만 릴리스하세요")
+    commit = head_commit()
+    say(f"   ARM64 빌드 커밋        : {commit[:12] if commit else '(git 없음)'}")
+    if not commit:
+        errors.append("git HEAD를 읽지 못했습니다 - ARM64 러너가 받을 커밋이 필요합니다 (--no-arm64로 건너뛰기)")
+        return
+    r = subprocess.run([gh, "api", f"repos/{GITHUB_REPO}/commits/{commit}", "--silent"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        errors.append(f"HEAD 커밋 {commit[:12]}이 GitHub에 없습니다 - push한 뒤 다시 실행하세요 "
+                      "(ARM64판은 GitHub의 이 커밋으로 빌드됨)")
+    changed = uncommitted_code_changes()
+    if changed:
+        errors.append("커밋하지 않은 변경이 있어 ARM64판이 x64판과 달라집니다 - 커밋·push하세요: "
+                      + ", ".join(changed[:5]) + (" ..." if len(changed) > 5 else ""))
+
+
+def find_workflow_run(request_id, timeout=120):
+    """gh workflow run은 실행 ID를 알려 주지 않으므로, run-name에 넣은 request_id로 찾습니다."""
+    gh = find_gh()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = subprocess.run([gh, "run", "list", "--workflow", ARM64_WORKFLOW, "--repo", GITHUB_REPO,
+                            "--event", "workflow_dispatch", "--limit", "20", "--json", "databaseId,displayTitle"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if r.returncode == 0:
+            for run_ in json.loads(r.stdout or "[]"):
+                if request_id in (run_.get("displayTitle") or ""):
+                    return run_["databaseId"]
+        time.sleep(5)
+    return None
+
+
+def build_arm64_on_github(version):
+    """GitHub Actions(windows-11-arm)에서 ARM64판을 빌드해 이 릴리스에 올리게 하고, 끝날 때까지 기다립니다."""
+    step("ARM64 - GitHub Actions (windows-11-arm)")
+    names = arm64_asset_names(version)
+    if DRY_RUN:
+        dry(f"gh workflow run {ARM64_WORKFLOW} -f version={version} -f commit=<HEAD> -> 끝날 때까지 기다림")
+        dry(f"draft에 {', '.join(names)}가 올라왔는지 확인")
+        return True
+    remote = remote_assets(version) or {}
+    if all(n in remote for n in names):
+        say("OK  ARM64판이 이미 올라가 있습니다 - 빌드 건너뜀")
+        return True
+
+    gh = find_gh()
+    commit = head_commit()
+    request_id = uuid.uuid4().hex[:12]
+    r = subprocess.run([gh, "workflow", "run", ARM64_WORKFLOW, "--repo", GITHUB_REPO,
+                        "-f", f"version={version}", "-f", f"commit={commit}", "-f", f"request_id={request_id}"],
+                       cwd=ROOT)
+    if r.returncode != 0:
+        say(f"XX  ARM64 워크플로를 시작하지 못했습니다 (exit {r.returncode})")
+        return False
+    run_id = find_workflow_run(request_id)
+    if not run_id:
+        say(f"XX  시작한 ARM64 워크플로를 찾지 못했습니다: https://github.com/{GITHUB_REPO}/actions")
+        return False
+    say(f"..  ARM64 빌드 중 (보통 10분 안팎): https://github.com/{GITHUB_REPO}/actions/runs/{run_id}")
+    r = subprocess.run([gh, "run", "watch", str(run_id), "--repo", GITHUB_REPO, "--exit-status",
+                        "--interval", "30"], cwd=ROOT)
+    if r.returncode != 0:
+        say(f"XX  ARM64 빌드 실패: https://github.com/{GITHUB_REPO}/actions/runs/{run_id}")
+        return False
+
+    remote = remote_assets(version) or {}
+    missing = [n for n in names if n not in remote]
+    if missing:
+        say(f"XX  워크플로는 끝났는데 릴리스에 없습니다: {', '.join(missing)}")
+        return False
+    for n in names:
+        say(f"OK  {n}  {remote[n][0][:23]}…")
+    return True
+
+
+def update_checksums_with_remote(version, assets):
+    """SHA256SUMS.txt를 로컬 파일 + 러너가 올린 ARM64 파일로 다시 만들어 올립니다."""
+    local = [a for a in assets if os.path.basename(a) != SUMS_NAME]
+    if DRY_RUN:
+        dry(f"{SUMS_NAME}에 ARM64 파일 체크섬을 더해 다시 올림")
+        return True
+    remote = remote_assets(version) or {}
+    entries = []
+    for name in arm64_asset_names(version):
+        digest = remote.get(name, ("", None))[0]
+        if not digest.startswith("sha256:"):
+            say(f"XX  {name}의 체크섬(digest)을 GitHub에서 받지 못했습니다")
+            return False
+        entries.append((name, digest.split(":", 1)[1]))
+    sums = write_checksums(version, local, remote=entries)
+    r = run([find_gh(), "release", "upload", f"v{version}", sums, "--repo", GITHUB_REPO, "--clobber"], cwd=ROOT)
+    if r.returncode != 0:
+        say(f"XX  {SUMS_NAME} 다시 올리기 실패")
+        return False
+    return verify_uploaded_assets(version, [sums])
+
+
+def upload_to_release(version, assets):
+    """(--arm64-build) 이미 있는 릴리스(보통 draft)에 ARM64 파일을 올리고 체크섬을 확인합니다. 공개는 하지 않음."""
+    step("UPLOAD - 릴리스에 ARM64 파일 올리기")
+    gh = find_gh()
+    assets = [a for a in assets if a and (DRY_RUN or os.path.exists(a))]
+    for a in assets:
+        say(f"   - {os.path.basename(a)}")
+    r = run([gh, "release", "upload", f"v{version}", *assets, "--repo", GITHUB_REPO, "--clobber"], cwd=ROOT)
+    if not DRY_RUN and r.returncode != 0:
+        say(f"XX  gh release upload 실패 (exit {r.returncode})")
+        return False
+    return verify_uploaded_assets(version, assets)
 
 
 def open_github_release(version):
@@ -559,6 +759,14 @@ def preflight(version, opts):
     if not re.match(r"^\d+\.\d+\.\d+$", version):
         errors.append(f"버전 형식이 잘못됐습니다: '{version}' - 주.부.수 (예: 0.4.0)")
 
+    arm64_build = opts["arm64_build"]
+    say(f"   이 Python의 빌드       : {HOST_ARCH}")
+    if arm64_build and HOST_ARCH != "arm64":
+        errors.append("--arm64-build는 ARM64용 Python에서만 쓸 수 있습니다")
+    elif not arm64_build and HOST_ARCH != "x64" and not opts["publish_only"]:
+        errors.append("ARM64용 Python입니다 - 릴리스는 x64용 Python으로 실행하세요 "
+                      "(ARM64판은 GitHub Actions가 빌드함)")
+
     current = get_current_version()
     say(f"   로컬 버전              : {current}")
     if current and version_tuple(version) < version_tuple(current) and not opts["publish_only"]:
@@ -569,7 +777,7 @@ def preflight(version, opts):
     latest = get_latest_github_version()
     if latest:
         say(f"   GitHub 최신 릴리스     : v{latest}")
-        if version_tuple(version) <= version_tuple(latest) and not opts["publish_only"]:
+        if version_tuple(version) <= version_tuple(latest) and not opts["publish_only"] and not arm64_build:
             errors.append(f"v{version}은 이미 공개된 v{latest}보다 새 버전이 아닙니다")
 
     if not opts["publish_only"] and not opts["skip_build"]:
@@ -595,7 +803,16 @@ def preflight(version, opts):
     if notes is None or notes.strip() in ("", CHANGELOG_PLACEHOLDER):
         warnings.append(f"{CHANGELOG_FILE}에 [{version}] 변경 내용이 없습니다 - 릴리스 설명이 비게 됩니다")
 
-    if not opts["no_publish"]:
+    if arm64_build:
+        # 러너의 GITHUB_TOKEN은 'repo' 권한 표시가 없으므로 gh_authenticated 대신 릴리스가 보이는지로 확인
+        if not find_gh():
+            errors.append("gh CLI가 없습니다")
+        else:
+            exists, is_draft = release_info(version)
+            say(f"   v{version} 릴리스         : {'draft' if is_draft else '공개됨' if exists else '없음'}")
+            if not exists:
+                errors.append(f"v{version} 릴리스(draft)가 없습니다 - x64 쪽 release.py가 먼저 만들어야 합니다")
+    elif not opts["no_publish"]:
         ok, detail = gh_authenticated()
         say(f"   gh CLI                 : {detail}")
         if not ok:
@@ -606,6 +823,12 @@ def preflight(version, opts):
                 warnings.append(f"v{version} 릴리스가 이미 공개되어 있습니다 - 파일이 교체됩니다")
             elif exists:
                 warnings.append(f"v{version} draft가 이미 있습니다 - 이어서 올립니다")
+            if opts["with_arm64"]:
+                arm64_preflight(errors, warnings)
+    if not arm64_build and opts["no_arm64"]:
+        warnings.append("--no-arm64: ARM64판 없이 x64판만 릴리스합니다")
+    elif not arm64_build and opts["no_publish"]:
+        warnings.append("--no-publish: ARM64판은 릴리스(draft)가 있어야 빌드되므로 건너뜁니다")
 
     for w in warnings:
         say(f"   !!  {w}")
@@ -630,6 +853,7 @@ def summary(version, state):
         ("비밀 검사", state.get("secrets")),
         ("ZIP", state.get("zip")),
         ("설치 프로그램", state.get("installer")),
+        ("ARM64판 (GitHub Actions)", state.get("arm64")),
         ("GitHub 릴리스 (앱 업데이트)", state.get("published")),
         ("다운로드 확인", state.get("verified")),
     ]
@@ -641,6 +865,9 @@ def summary(version, state):
         else:
             mark, detail = "OK", "완료"
         say(f"  {mark}  {label:<28} {detail}")
+
+    if state.get("arm64_build"):
+        return  # 러너 안에서 bump한 것이므로 커밋 안내가 필요 없음
 
     if state.get("bumped"):
         files = " ".join(f.replace(os.sep, "/") for f in VERSIONED_FILES if os.path.exists(os.path.join(ROOT, f)))
@@ -681,7 +908,7 @@ def print_status():
         say("\n추천:")
         say(f"  Patch  python release.py {suggestions['patch']}")
         say(f"  Minor  python release.py {suggestions['minor']}")
-    say("\n옵션: --dry-run  --yes  --skip-tests  --skip-build  --publish-only  --no-publish")
+    say("\n옵션: --dry-run  --yes  --skip-tests  --skip-build  --publish-only  --no-publish  --no-arm64")
     say("      --urgency optional|recommended|critical")
     say("\n이 스크립트는 커밋·태그를 하지 않습니다 - 릴리스 뒤에 직접 하세요.")
 
@@ -696,6 +923,8 @@ def parse_args(argv):
         "skip_build": "--skip-build" in argv,
         "publish_only": "--publish-only" in argv,
         "no_publish": "--no-publish" in argv,
+        "no_arm64": "--no-arm64" in argv,
+        "arm64_build": "--arm64-build" in argv,
         "urgency": "optional",
     }
     positional = []
@@ -709,6 +938,8 @@ def parse_args(argv):
         if not a.startswith("-"):
             positional.append(a)
         i += 1
+    # x64 릴리스에 ARM64판을 붙일지 (GitHub Actions 사용)
+    flags["with_arm64"] = not (flags["no_arm64"] or flags["no_publish"] or flags["arm64_build"])
     return flags, positional
 
 
@@ -733,8 +964,13 @@ def main():
     if not preflight(new_version, flags):
         return 1
 
+    arch = "arm64" if flags["arm64_build"] else "x64"
     step("PLAN")
     say(f"   {get_current_version()}  ->  {new_version}   (중요도: {flags['urgency']})")
+    if flags["arm64_build"]:
+        say("   ARM64판을 빌드해 이미 있는 릴리스에 올리기만 합니다 (공개 안 함).")
+    else:
+        say("   빌드: x64 (이 PC)" + (" + ARM64 (GitHub Actions)" if flags["with_arm64"] else ""))
     if not flags["publish_only"]:
         say("   버전 파일을 고치지만 커밋하지 않습니다 - 커밋은 직접 하세요.")
 
@@ -743,7 +979,7 @@ def main():
             say("취소했습니다.")
             return 1
 
-    state = {}
+    state = {"arm64_build": flags["arm64_build"]}
 
     # --- test (bump 전에: 실패하면 아무것도 바뀌지 않음) ---------------------
     if flags["publish_only"] or flags["skip_tests"]:
@@ -762,8 +998,8 @@ def main():
     version = new_version
     zip_path = installer_path = None
     if flags["publish_only"]:
-        zp = os.path.join(ROOT, DIST_DIR, ZIP_NAME.format(version=version))
-        ip = os.path.join(ROOT, INSTALLER_OUTPUT_DIR, INSTALLER_NAME.format(version=version))
+        zp = os.path.join(ROOT, DIST_DIR, zip_name(version, arch))
+        ip = os.path.join(ROOT, INSTALLER_OUTPUT_DIR, installer_name(version, arch))
         zip_path = zp if os.path.exists(zp) else None
         installer_path = ip if os.path.exists(ip) else None
         state["zip"] = True if zip_path else None
@@ -784,9 +1020,9 @@ def main():
             built_ok = state["secrets"]
 
         if built_ok:
-            zip_path = create_zip(version)
+            zip_path = create_zip(version, arch)
             state["zip"] = bool(zip_path)
-            installer_path = build_installer(version)
+            installer_path = build_installer(version, arch)
             state["installer"] = bool(installer_path)
         else:
             say("\nXX  빌드를 쓸 수 없어 배포 전에 멈춥니다. 버전 파일은 이미 고쳐졌습니다.")
@@ -798,17 +1034,23 @@ def main():
         summary(version, state)
         return 1
 
-    # --- publish (draft -> 검증 -> 공개) ------------------------------------
+    # --- (GitHub Actions의 ARM64 러너) 이미 있는 릴리스에 올리기만 ----------------
+    if flags["arm64_build"]:
+        state["published"] = upload_to_release(version, [installer_path, zip_path])
+        summary(version, state)
+        return 0 if state["published"] else 1
+
+    # --- publish (draft -> 검증 -> ARM64 -> 공개) ------------------------------
     if flags["no_publish"]:
         state["published"] = None
     else:
         assets = [installer_path, zip_path]
         assets.append(write_checksums(version, [a for a in assets if a]))
-        state["published"] = publish_release(version, assets, flags["urgency"])
+        state["published"] = publish_release(version, assets, flags["urgency"], flags["with_arm64"], state)
         if not state["published"]:
             summary(version, state)
             return 1
-        state["verified"] = verify_download(version)
+        state["verified"] = verify_download(version, ["x64", "arm64"] if flags["with_arm64"] else ["x64"])
 
     summary(version, state)
     return 0 if state.get("verified") is not False else 1

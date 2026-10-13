@@ -190,3 +190,39 @@ updater.spawn_hidden_powershell(s)
         time.sleep(0.5)
     assert (target / "marker.txt").read_text() == "new"
     assert "files replaced" in log.read_text(encoding="utf-8-sig")
+
+
+def _release_with(*names):
+    return {"tag_name": "v1.2.3", "assets": [{"name": n, "url": n, "size": 1} for n in names]}
+
+
+def test_arm64_device_prefers_arm64_installer_and_falls_back_to_x64():
+    full = _release_with(
+        "FocusApp-v1.2.3-win64.zip",
+        "FocusApp_Setup_1.2.3.exe",
+        "FocusApp-v1.2.3-arm64.zip",
+        "FocusApp_Setup_ARM64_1.2.3.exe",
+    )
+    arm = release_from_json(full, arch="arm64")
+    assert arm.asset_name == "FocusApp_Setup_ARM64_1.2.3.exe" and arm.kind == "installer"
+    x64 = release_from_json(full, arch="x64")
+    assert x64.asset_name == "FocusApp_Setup_1.2.3.exe" and x64.kind == "installer"
+
+    # ARM64판이 없는 릴리스: ARM64 기기도 x64판 (에뮬레이션으로 실행)
+    x64_only = _release_with("FocusApp-v1.2.3-win64.zip", "FocusApp_Setup_1.2.3.exe")
+    assert release_from_json(x64_only, arch="arm64").asset_name == "FocusApp_Setup_1.2.3.exe"
+
+    # ARM64 zip만 있으면 x64 설치 프로그램보다 ARM64 zip
+    arm_zip = _release_with("FocusApp_Setup_1.2.3.exe", "FocusApp-v1.2.3-arm64.zip")
+    picked = release_from_json(arm_zip, arch="arm64")
+    assert picked.asset_name == "FocusApp-v1.2.3-arm64.zip" and picked.kind == "zip"
+
+
+def test_x64_device_never_picks_arm64_assets():
+    arm_only = _release_with("FocusApp-v1.2.3-arm64.zip", "FocusApp_Setup_ARM64_1.2.3.exe")
+    info = release_from_json(arm_only, arch="x64")
+    assert not info.installable and info.kind == "zip"
+
+
+def test_machine_arch_is_known_value():
+    assert updater.machine_arch() in ("x64", "arm64")

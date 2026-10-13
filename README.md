@@ -27,7 +27,8 @@
 
 ## 사용법
 
-`pip install -r requirements.txt` 후 `python -m focus_app` (또는 `scriptsun.bat`)로 실행하면 FocusApp 창이 열립니다.
+`pip install -r requirements.txt` 후 `python -m focus_app` (또는 `scripts
+un.bat`)로 실행하면 FocusApp 창이 열립니다.
 창은 위에서 아래로 순서대로 쓰면 됩니다.
 
 1. **① 모드 고르기** — 왼쪽에서 모드(공부용·업무용·자유 시간 등)를 고르거나 `+ 새 모드 만들기`로 만듭니다.
@@ -74,15 +75,32 @@ python release.py 0.4.0            # 실제 릴리스
 ```
 
 순서: preflight → 테스트 → 버전 bump → PyInstaller → 비밀 파일 검사 → zip → Inno Setup 설치 프로그램
-→ GitHub 릴리스(draft로 올림 → 체크섬 확인 → 공개) → 다운로드 주소 확인.
+→ GitHub 릴리스(draft로 올림 → 체크섬 확인 → ARM64판 빌드 → 공개) → 다운로드 주소 확인.
+
+릴리스마다 x64판과 ARM64판을 같은 버전으로 함께 올립니다.
+
+| | 설치 프로그램 | zip |
+|---|---|---|
+| x64 | `FocusApp_Setup_<버전>.exe` | `FocusApp-v<버전>-win64.zip` |
+| ARM64 | `FocusApp_Setup_ARM64_<버전>.exe` | `FocusApp-v<버전>-arm64.zip` |
+
+* ARM64판은 ARM64용 Python으로만 빌드할 수 있어서, `release.py`가 x64판을 draft로 올린 뒤
+  GitHub Actions의 `ARM64 빌드` 워크플로(`windows-11-arm` 러너)를 실행하고 끝날 때까지 기다립니다.
+  러너가 같은 draft에 ARM64 파일을 올리면 `SHA256SUMS.txt`에 함께 적은 뒤 공개합니다.
+  ARM64 빌드가 실패하면 공개하지 않고 draft로 남깁니다.
+* 러너는 로컬 HEAD 커밋을 받아 빌드합니다. 그래서 코드 변경은 먼저 커밋·push해야 합니다
+  (버전 파일은 러너가 똑같이 bump하므로 커밋하지 않아도 됨). 안 되어 있으면 preflight에서 멈춥니다.
+* x64판만 올리려면 `--no-arm64`. ARM64가 실패해 draft로 남았으면 `--publish-only`로 이어서 합니다.
 
 * 변경 내용은 `CHANGELOG.md`의 `## [0.4.0]` 절에 적으면 릴리스 설명과 앱의 업데이트 창에 나옵니다.
 * `--urgency recommended`면 앱이 알림으로, `critical`이면 실행하자마자 업데이트 창으로 알려 줍니다.
 * 스크립트는 git을 건드리지 않습니다. 끝나면 안내되는 대로 버전 파일을 커밋·push하세요.
-* GitHub Actions는 push·PR마다 테스트만 돌립니다.
+* GitHub Actions는 push·PR마다 테스트를 돌리고, 릴리스할 때 ARM64판을 빌드합니다.
 
-앱의 `업데이트 확인`은 최신 릴리스의 `FocusApp_Setup_<버전>.exe`를 받아 체크섬을 확인한 뒤,
+앱의 `업데이트 확인`은 최신 릴리스에서 기기에 맞는 설치 프로그램을 받아 체크섬을 확인한 뒤,
 앱을 끄고 조용히 설치(`/VERYSILENT /DIR=<현재 폴더>`)한 다음 새 버전을 다시 실행합니다.
+ARM64 기기면 (x64판이 에뮬레이션으로 돌고 있어도) ARM64판을, 아니면 x64판을 고릅니다.
+릴리스에 ARM64판이 없으면 ARM64 기기도 x64판을 씁니다.
 
 ## 관리자 권한 도우미
 
